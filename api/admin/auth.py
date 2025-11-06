@@ -12,6 +12,92 @@ import hashlib
 from shared.utils.logger import logger
 
 
+class LoginAttemptTracker:
+    """登录尝试追踪器 - 防爆破"""
+
+    def __init__(self):
+        self.attempts: Dict[str, list] = {}  # ip_or_username -> [timestamps]
+        self.lockouts: Dict[str, datetime] = {}  # ip_or_username -> lockout_until
+
+        # 配置
+        self.max_attempts = int(os.getenv("MAX_LOGIN_ATTEMPTS", "5"))  # 最大尝试次数
+        self.lockout_duration = timedelta(minutes=int(os.getenv("LOCKOUT_DURATION_MINUTES", "15")))  # 锁定时长
+        self.attempt_window = timedelta(minutes=int(os.getenv("ATTEMPT_WINDOW_MINUTES", "10")))  # 统计时间窗口
+
+    def record_attempt(self, identifier: str):
+        """记录登录尝试"""
+        now = datetime.now()
+
+        # 初始化
+        if identifier not in self.attempts:
+            self.attempts[identifier] = []
+
+        # 添加尝试记录
+        self.attempts[identifier].append(now)
+
+        # 清理过期记录
+        self.attempts[identifier] = [
+            t for t in self.attempts[identifier]
+            if now - t < self.attempt_window
+        ]
+
+        # 检查是否需要锁定
+        if len(self.attempts[identifier]) >= self.max_attempts:
+            self.lockouts[identifier] = now + self.lockout_duration
+            logger.warning(f"🔒 账号/IP已锁定: {identifier}，锁定时长: {self.lockout_duration}")
+
+    def is_locked(self, identifier: str) -> tuple[bool, Optional[str]]:
+        """检查是否被锁定"""
+        if identifier in self.lockouts:
+            lockout_until = self.lockouts[identifier]
+            if datetime.now() < lockout_until:
+                remaining = (lockout_until - datetime.now()).seconds // 60
+                return True, f"登录已锁定，请 {remaining} 分钟后再试"
+            else:
+                # 锁定已过期，清除记录
+                del self.lockouts[identifier]
+                if identifier in self.attempts:
+                    del self.attempts[identifier]
+
+        return False, None
+
+    def clear_attempts(self, identifier: str):
+        """清除登录尝试记录（登录成功后调用）"""
+        if identifier in self.attempts:
+            del self.attempts[identifier]
+        if identifier in self.lockouts:
+            del self.lockouts[identifier]
+
+    def cleanup_expired(self):
+        """清理过期记录"""
+        now = datetime.now()
+
+        # 清理过期的尝试记录
+        expired_attempts = []
+        for identifier, timestamps in self.attempts.items():
+            self.attempts[identifier] = [
+                t for t in timestamps
+                if now - t < self.attempt_window
+            ]
+            if not self.attempts[identifier]:
+                expired_attempts.append(identifier)
+
+        for identifier in expired_attempts:
+            del self.attempts[identifier]
+
+        # 清理过期的锁定
+        expired_lockouts = [
+            identifier for identifier, lockout_until in self.lockouts.items()
+            if now >= lockout_until
+        ]
+        for identifier in expired_lockouts:
+            del self.lockouts[identifier]
+
+
+# 全局登录尝试追踪器
+login_tracker = LoginAttemptTracker()
+
+
 class SessionManager:
     """会话管理器"""
 

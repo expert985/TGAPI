@@ -8,7 +8,7 @@ from typing import Optional
 from datetime import datetime
 import json
 
-from .auth import AdminAuth, session_manager
+from .auth import AdminAuth, session_manager, login_tracker
 from shared.database.init import db
 from shared.utils.logger import logger
 from shared.utils.proxy_manager import proxy_pool, ProxyManager
@@ -49,16 +49,50 @@ async def login(
     password: str = Form(...),
     remember: bool = Form(False)
 ):
-    """处理登录"""
+    """处理登录（带防爆破机制）"""
+    # 获取客户端IP
+    client_ip = request.client.host
+
+    # 检查IP是否被锁定
+    ip_locked, ip_message = login_tracker.is_locked(client_ip)
+    if ip_locked:
+        logger.warning(f"🔒 IP锁定尝试登录: {client_ip}")
+        return templates.TemplateResponse("admin/login.html", {
+            "request": request,
+            "error": ip_message
+        })
+
+    # 检查用户名是否被锁定
+    username_locked, username_message = login_tracker.is_locked(f"user:{username}")
+    if username_locked:
+        logger.warning(f"🔒 用户锁定尝试登录: {username}")
+        return templates.TemplateResponse("admin/login.html", {
+            "request": request,
+            "error": username_message
+        })
+
+    # 尝试登录
     success, result, role = AdminAuth.login(username, password)
 
     if not success:
+        # 登录失败，记录尝试
+        login_tracker.record_attempt(client_ip)
+        login_tracker.record_attempt(f"user:{username}")
+
+        logger.warning(f"⚠️ 登录失败: {username} from {client_ip}")
+
         return templates.TemplateResponse("admin/login.html", {
             "request": request,
             "error": result
         })
 
-    # 登录成功，设置cookie
+    # 登录成功，清除尝试记录
+    login_tracker.clear_attempts(client_ip)
+    login_tracker.clear_attempts(f"user:{username}")
+
+    logger.info(f"✅ 登录成功: {username} from {client_ip}")
+
+    # 设置cookie
     response = RedirectResponse(url="/admin", status_code=status.HTTP_302_FOUND)
     response.set_cookie(
         key="session_id",
