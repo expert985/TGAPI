@@ -1,9 +1,10 @@
 """
-REST API 服务器 - 提供TGAPI验证码获取接口
+REST API 服务器 - 提供TGAPI验证码获取接口 + 管理后台
 """
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
 import uvicorn
@@ -15,11 +16,14 @@ from shared.utils.license import LicenseManager
 
 from modules.tgapi.core import tgapi_manager
 
+# 导入管理后台
+from api.admin import admin_router, start_session_cleanup
+
 
 # FastAPI应用
 app = FastAPI(
     title="TG Bot Manager API",
-    description="Telegram账号管理系统 API",
+    description="Telegram账号管理系统 API + Web管理后台",
     version="1.0.0"
 )
 
@@ -31,6 +35,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 集成管理后台路由
+app.include_router(admin_router)
 
 # 许可证管理器
 license_manager = LicenseManager(db)
@@ -264,7 +271,7 @@ async def list_tgapi_sessions(status: Optional[str] = None):
 # ==================== 启动服务 ====================
 
 def start_server():
-    """启动API服务器"""
+    """启动API服务器 + Web管理后台"""
     # 加载环境变量
     load_env_file()
 
@@ -281,8 +288,15 @@ def start_server():
     except Exception as e:
         logger.warning(f"执行租户schema失败（可能已存在）: {str(e)}")
 
+    # 启动会话清理任务
+    logger.info("启动管理后台会话清理任务...")
+    start_session_cleanup()
+
     # 启动服务器
-    logger.info(f"🚀 启动API服务器: {settings.server.host}:{settings.server.port}")
+    logger.info(f"🚀 启动API服务器 + Web管理后台")
+    logger.info(f"   API地址: http://{settings.server.host}:{settings.server.port}")
+    logger.info(f"   管理后台: http://{settings.server.host}:{settings.server.port}/admin")
+    logger.info(f"   默认账号: admin / admin123")
 
     uvicorn.run(
         "api.server:app",

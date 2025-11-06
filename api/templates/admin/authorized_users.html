@@ -1,0 +1,367 @@
+{% extends "admin/base.html" %}
+
+{% block title %}用户授权管理{% endblock %}
+{% block page_title %}用户授权管理{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div class="d-flex justify-content-between align-items-center">
+        <div>
+            <h1 class="page-title">
+                <i class="bi bi-person-check"></i> 用户授权管理
+            </h1>
+            <p class="text-muted">管理有权使用机器人的TG用户</p>
+        </div>
+        <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#authorizeUserModal">
+            <i class="bi bi-plus-circle"></i> 授权用户
+        </button>
+    </div>
+</div>
+
+<!-- 筛选器 -->
+<div class="card border-0 shadow-sm mb-4">
+    <div class="card-body">
+        <form method="get" class="row g-3 align-items-end">
+            <div class="col-md-3">
+                <label class="form-label">状态筛选</label>
+                <select class="form-select" name="status_filter" onchange="this.form.submit()">
+                    <option value="">全部</option>
+                    <option value="active" {% if status_filter == 'active' %}selected{% endif %}>激活</option>
+                    <option value="expired" {% if status_filter == 'expired' %}selected{% endif %}>已过期</option>
+                    <option value="suspended" {% if status_filter == 'suspended' %}selected{% endif %}>已暂停</option>
+                </select>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- 授权用户列表 -->
+<div class="card border-0 shadow-sm mb-4">
+    <div class="card-header bg-white">
+        <h5 class="mb-0"><i class="bi bi-list-ul"></i> 授权用户列表 (共 {{ users|length }} 人)</h5>
+    </div>
+    <div class="card-body p-0">
+        {% if users %}
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>TG用户ID</th>
+                        <th>用户名</th>
+                        <th>全名</th>
+                        <th>等级</th>
+                        <th>时长</th>
+                        <th>过期时间</th>
+                        <th>状态</th>
+                        <th>授权时间</th>
+                        <th>最后活跃</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for auth_user in users %}
+                    <tr>
+                        <td><code>{{ auth_user.telegram_id }}</code></td>
+                        <td>{{ auth_user.username or '-' }}</td>
+                        <td>{{ auth_user.full_name or '-' }}</td>
+                        <td>
+                            {% if auth_user.authorization_level == 'vip' %}
+                                <span class="badge bg-warning">VIP</span>
+                            {% elif auth_user.authorization_level == 'premium' %}
+                                <span class="badge bg-info">Premium</span>
+                            {% else %}
+                                <span class="badge bg-secondary">Basic</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if auth_user.duration_type == 'permanent' %}
+                                <span class="badge bg-success">永久</span>
+                            {% elif auth_user.duration_type == '1year' %}
+                                <span class="badge bg-primary">1年</span>
+                            {% elif auth_user.duration_type == '6months' %}
+                                <span class="badge bg-info">6个月</span>
+                            {% elif auth_user.duration_type == '3months' %}
+                                <span class="badge bg-info">3个月</span>
+                            {% elif auth_user.duration_type == '1month' %}
+                                <span class="badge bg-info">1个月</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if auth_user.expire_date %}
+                                {{ auth_user.expire_date }}
+                            {% else %}
+                                <span class="text-muted">永不过期</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if auth_user.status == 'active' %}
+                                <span class="status-badge bg-success">激活</span>
+                            {% elif auth_user.status == 'expired' %}
+                                <span class="status-badge bg-danger">已过期</span>
+                            {% elif auth_user.status == 'suspended' %}
+                                <span class="status-badge bg-warning">已暂停</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ auth_user.authorization_date }}</td>
+                        <td>{{ auth_user.last_active or '从未' }}</td>
+                        <td>
+                            {% if auth_user.status == 'active' %}
+                            <button class="btn btn-sm btn-outline-info btn-action" onclick="renewUser({{ auth_user.telegram_id }})">
+                                <i class="bi bi-arrow-clockwise"></i> 续期
+                            </button>
+                            <button class="btn btn-sm btn-outline-warning btn-action" onclick="suspendUser({{ auth_user.telegram_id }})">
+                                <i class="bi bi-pause-circle"></i> 暂停
+                            </button>
+                            {% elif auth_user.status == 'expired' or auth_user.status == 'suspended' %}
+                            <button class="btn btn-sm btn-outline-success btn-action" onclick="activateUser({{ auth_user.telegram_id }})">
+                                <i class="bi bi-play-circle"></i> 激活
+                            </button>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="text-center py-5">
+            <i class="bi bi-inbox" style="font-size: 4rem; color: #ccc;"></i>
+            <p class="text-muted mt-3">暂无授权用户</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- 未授权访问日志 -->
+<div class="card border-0 shadow-sm">
+    <div class="card-header bg-white">
+        <h5 class="mb-0"><i class="bi bi-exclamation-triangle"></i> 未授权访问日志 (最近50条)</h5>
+    </div>
+    <div class="card-body p-0">
+        {% if unauth_logs %}
+        <div class="table-responsive">
+            <table class="table table-sm table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>TG用户ID</th>
+                        <th>用户名</th>
+                        <th>全名</th>
+                        <th>尝试命令</th>
+                        <th>访问时间</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for log in unauth_logs %}
+                    <tr>
+                        <td><code>{{ log.telegram_id }}</code></td>
+                        <td>{{ log.username or '-' }}</td>
+                        <td>{{ log.full_name or '-' }}</td>
+                        <td><code>{{ log.command or '-' }}</code></td>
+                        <td>{{ log.access_time }}</td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-primary btn-action" onclick="authorizeFromLog({{ log.telegram_id }}, '{{ log.username }}', '{{ log.full_name }}')">
+                                <i class="bi bi-person-plus"></i> 授权此用户
+                            </button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="text-center py-4">
+            <p class="text-muted mb-0">暂无未授权访问记录</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- 授权用户模态框 -->
+<div class="modal fade" id="authorizeUserModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-person-plus"></i> 授权新用户</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="authorizeUserForm">
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Telegram用户ID <span class="text-danger">*</span></label>
+                            <input type="number" class="form-control" name="telegram_id" required
+                                   placeholder="例如：123456789">
+                            <div class="form-text">用户的Telegram ID（数字）</div>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">TG用户名</label>
+                            <input type="text" class="form-control" name="username"
+                                   placeholder="例如：@username">
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">用户全名</label>
+                        <input type="text" class="form-control" name="full_name"
+                               placeholder="例如：张三">
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">授权时长 <span class="text-danger">*</span></label>
+                            <select class="form-select" name="duration_type" required>
+                                <option value="1month">1个月</option>
+                                <option value="3months">3个月</option>
+                                <option value="6months" selected>6个月</option>
+                                <option value="1year">1年</option>
+                                <option value="permanent">永久</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">授权等级</label>
+                            <select class="form-select" name="authorization_level">
+                                <option value="basic" selected>Basic（基础）</option>
+                                <option value="premium">Premium（高级）</option>
+                                <option value="vip">VIP</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">最大账号数</label>
+                            <input type="number" class="form-control" name="max_accounts" value="10">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">最大TGAPI会话数</label>
+                            <input type="number" class="form-control" name="max_tgapi_sessions" value="5">
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">付款信息</label>
+                        <input type="text" class="form-control" name="payment_info"
+                               placeholder="例如：支付宝 100元">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">备注</label>
+                        <textarea class="form-control" name="notes" rows="2"
+                                  placeholder="可选备注信息"></textarea>
+                    </div>
+                    <div class="alert alert-info">
+                        <strong>提示：</strong>
+                        <ul class="mb-0">
+                            <li>Telegram ID可以通过机器人获取，或者在未授权访问日志中查看</li>
+                            <li>授权后用户可立即使用机器人</li>
+                            <li>可以随时续期或暂停授权</li>
+                        </ul>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" onclick="submitAuthorizeUser()">
+                    <i class="bi bi-check-circle"></i> 授权
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// 授权用户
+function submitAuthorizeUser() {
+    const form = document.getElementById('authorizeUserForm');
+    const formData = new FormData(form);
+
+    fetch('/admin/users/authorize', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert('授权成功！\n' + data.message);
+            location.reload();
+        } else {
+            alert('授权失败：' + data.message);
+        }
+    })
+    .catch(error => {
+        alert('授权失败：' + error);
+    });
+}
+
+// 从未授权日志中授权用户
+function authorizeFromLog(telegramId, username, fullName) {
+    // 填充表单
+    document.querySelector('[name="telegram_id"]').value = telegramId;
+    document.querySelector('[name="username"]').value = username || '';
+    document.querySelector('[name="full_name"]').value = fullName || '';
+
+    // 打开模态框
+    const modal = new bootstrap.Modal(document.getElementById('authorizeUserModal'));
+    modal.show();
+}
+
+// 续期用户
+function renewUser(telegramId) {
+    if (confirm('确定要为用户 ' + telegramId + ' 续期吗？')) {
+        authorizeFromLog(telegramId, '', '');
+    }
+}
+
+// 暂停用户
+function suspendUser(telegramId) {
+    if (!confirm('确定要暂停用户 ' + telegramId + ' 的授权吗？')) {
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('notes', '管理员手动暂停');
+
+    fetch(`/admin/users/${telegramId}/suspend`, {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert('暂停成功！');
+            location.reload();
+        } else {
+            alert('暂停失败：' + data.message);
+        }
+    })
+    .catch(error => {
+        alert('暂停失败：' + error);
+    });
+}
+
+// 激活用户
+function activateUser(telegramId) {
+    if (!confirm('确定要激活用户 ' + telegramId + ' 的授权吗？')) {
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('notes', '管理员手动激活');
+
+    fetch(`/admin/users/${telegramId}/activate`, {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert('激活成功！');
+            location.reload();
+        } else {
+            alert('激活失败：' + data.message);
+        }
+    })
+    .catch(error => {
+        alert('激活失败：' + error);
+    });
+}
+</script>
+{% endblock %}

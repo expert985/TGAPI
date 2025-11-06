@@ -1,0 +1,120 @@
+{% extends "admin/base.html" %}
+
+{% block title %}系统设置{% endblock %}
+{% block page_title %}系统设置{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">
+        <i class="bi bi-gear"></i> 系统设置
+    </h1>
+    <p class="text-muted">配置系统参数和选项</p>
+</div>
+
+<!-- 基本设置 -->
+<div class="card border-0 shadow-sm mb-4">
+    <div class="card-header bg-white">
+        <h5 class="mb-0"><i class="bi bi-sliders"></i> 基本设置</h5>
+    </div>
+    <div class="card-body">
+        <table class="table table-borderless">
+            <tr>
+                <th width="30%">数据库类型</th>
+                <td>{{ settings.database_type }}</td>
+            </tr>
+            <tr>
+                <th>服务器地址</th>
+                <td>{{ settings.server_host }}:{{ settings.server_port }}</td>
+            </tr>
+            <tr>
+                <th>TGAPI基础URL</th>
+                <td><code>{{ settings.tgapi_base_url }}</code></td>
+            </tr>
+        </table>
+    </div>
+</div>
+
+<!-- 安全设置 -->
+<div class="card border-0 shadow-sm mb-4">
+    <div class="card-header bg-white">
+        <h5 class="mb-0"><i class="bi bi-shield-lock"></i> 安全设置</h5>
+    </div>
+    <div class="card-body">
+        <form>
+            <div class="mb-3">
+                <label class="form-label">会话超时时间（小时）</label>
+                <input type="number" class="form-control" value="24" readonly>
+                <div class="form-text">管理员会话的有效时间</div>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">最大登录尝试次数</label>
+                <input type="number" class="form-control" value="5" readonly>
+                <div class="form-text">超过此次数将锁定账号</div>
+            </div>
+            <div class="mb-3 form-check">
+                <input type="checkbox" class="form-check-input" id="enable2fa" disabled>
+                <label class="form-check-label" for="enable2fa">
+                    启用两步验证（开发中）
+                </label>
+            </div>
+            <button type="button" class="btn btn-secondary" disabled>
+                <i class="bi bi-save"></i> 保存设置（开发中）
+            </button>
+        </form>
+    </div>
+</div>
+
+<!-- 系统信息 -->
+<div class="card border-0 shadow-sm">
+    <div class="card-header bg-white">
+        <h5 class="mb-0"><i class="bi bi-info-circle"></i> 系统信息</h5>
+    </div>
+    <div class="card-body">
+        <table class="table table-borderless">
+            <tr>
+                <th width="30%">系统名称</th>
+                <td>TG Bot Manager</td>
+            </tr>
+            <tr>
+                <th>系统版本</th>
+                <td>v1.0.0</td>
+            </tr>
+            <tr>
+                <th>Python版本</th>
+                <td>3.11+</td>
+            </tr>
+            <tr>
+                <th>FastAPI版本</th>
+                <td>0.104.0+</td>
+            </tr>
+            <tr>
+                <th>Telethon版本</th>
+                <td>1.30.0+</td>
+            </tr>
+        </table>
+    </div>
+</div>
+
+<!-- 维护操作 -->
+<div class="card border-0 shadow-sm mt-4">
+    <div class="card-header bg-white bg-danger text-white">
+        <h5 class="mb-0"><i class="bi bi-exclamation-triangle"></i> 危险操作</h5>
+    </div>
+    <div class="card-body">
+        <div class="alert alert-danger">
+            <strong>警告：</strong>以下操作可能导致数据丢失，请谨慎操作！
+        </div>
+        <div class="d-grid gap-2">
+            <button class="btn btn-outline-warning" disabled>
+                <i class="bi bi-arrow-clockwise"></i> 清理过期会话
+            </button>
+            <button class="btn btn-outline-warning" disabled>
+                <i class="bi bi-trash"></i> 清理日志（保留最近30天）
+            </button>
+            <button class="btn btn-outline-danger" disabled>
+                <i class="bi bi-database"></i> 数据库备份
+            </button>
+        </div>
+    </div>
+</div>
+{% endblock %}

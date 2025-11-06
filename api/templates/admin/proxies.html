@@ -1,0 +1,240 @@
+{% extends "admin/base.html" %}
+
+{% block title %}代理管理{% endblock %}
+{% block page_title %}代理管理{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div class="d-flex justify-content-between align-items-center">
+        <div>
+            <h1 class="page-title">
+                <i class="bi bi-hdd-network"></i> 代理管理
+            </h1>
+            <p class="text-muted">管理系统代理池，支持MTProxy、SOCKS5、HTTP代理</p>
+        </div>
+        <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addProxyModal">
+            <i class="bi bi-plus-circle"></i> 添加代理
+        </button>
+    </div>
+</div>
+
+<!-- 代理统计 -->
+<div class="row g-4 mb-4">
+    <div class="col-md-4">
+        <div class="card border-0 shadow-sm">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="text-muted mb-2">代理总数</h6>
+                        <h2 class="mb-0">{{ count }}</h2>
+                    </div>
+                    <div class="icon text-primary">
+                        <i class="bi bi-hdd-network-fill" style="font-size: 2.5rem; opacity: 0.8;"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card border-0 shadow-sm">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="text-muted mb-2">在线代理</h6>
+                        <h2 class="mb-0 text-success">{{ count }}</h2>
+                    </div>
+                    <div class="icon text-success">
+                        <i class="bi bi-check-circle-fill" style="font-size: 2.5rem; opacity: 0.8;"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card border-0 shadow-sm">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="text-muted mb-2">离线代理</h6>
+                        <h2 class="mb-0 text-muted">0</h2>
+                    </div>
+                    <div class="icon text-danger">
+                        <i class="bi bi-x-circle-fill" style="font-size: 2.5rem; opacity: 0.8;"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 代理列表 -->
+<div class="card border-0 shadow-sm">
+    <div class="card-header bg-white">
+        <h5 class="mb-0"><i class="bi bi-list-ul"></i> 代理列表</h5>
+    </div>
+    <div class="card-body p-0">
+        {% if proxies %}
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>类型</th>
+                        <th>服务器</th>
+                        <th>端口</th>
+                        <th>密钥</th>
+                        <th>状态</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for proxy in proxies %}
+                    <tr>
+                        <td>
+                            {% if proxy.type == 'mtproto' %}
+                                <span class="badge bg-primary">MTProto</span>
+                            {% elif proxy.type == 'socks5' %}
+                                <span class="badge bg-info">SOCKS5</span>
+                            {% elif proxy.type == 'http' %}
+                                <span class="badge bg-secondary">HTTP</span>
+                            {% endif %}
+                        </td>
+                        <td><code>{{ proxy.server }}</code></td>
+                        <td><code>{{ proxy.port }}</code></td>
+                        <td>
+                            {% if proxy.secret %}
+                                <code class="text-truncate" style="max-width: 200px; display: inline-block;">
+                                    {{ proxy.secret[:20] }}...
+                                </code>
+                            {% else %}
+                                <span class="text-muted">无</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <span class="status-badge bg-success">在线</span>
+                        </td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-info btn-action" onclick="testProxy('{{ proxy.server }}', {{ proxy.port }})">
+                                <i class="bi bi-gear"></i> 测试
+                            </button>
+                            <button class="btn btn-sm btn-outline-danger btn-action" onclick="removeProxy('{{ proxy.server }}', {{ proxy.port }})">
+                                <i class="bi bi-trash"></i> 删除
+                            </button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="text-center py-5">
+            <i class="bi bi-inbox" style="font-size: 4rem; color: #ccc;"></i>
+            <p class="text-muted mt-3">暂无代理，点击右上角"添加代理"按钮添加第一个代理</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- 添加代理模态框 -->
+<div class="modal fade" id="addProxyModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-plus-circle"></i> 添加代理</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="addProxyForm">
+                    <div class="mb-3">
+                        <label class="form-label">代理类型</label>
+                        <select class="form-select" id="proxyType" name="proxy_type">
+                            <option value="mtproto" selected>MTProto (推荐)</option>
+                            <option value="socks5">SOCKS5</option>
+                            <option value="http">HTTP/HTTPS</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">代理链接</label>
+                        <textarea class="form-control" id="proxyLink" name="proxy_link" rows="3" required
+                                  placeholder="MTProxy: https://t.me/proxy?server=1.2.3.4&port=443&secret=...&#10;SOCKS5: socks5://user:pass@1.2.3.4:1080"></textarea>
+                        <div class="form-text">请输入完整的代理链接</div>
+                    </div>
+                    <div class="alert alert-info">
+                        <strong>提示：</strong>
+                        <ul class="mb-0">
+                            <li>MTProxy格式：https://t.me/proxy?server=SERVER&port=PORT&secret=SECRET</li>
+                            <li>SOCKS5格式：socks5://[user:pass@]SERVER:PORT</li>
+                        </ul>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" onclick="submitAddProxy()">
+                    <i class="bi bi-check-circle"></i> 添加
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// 添加代理
+function submitAddProxy() {
+    const form = document.getElementById('addProxyForm');
+    const formData = new FormData(form);
+
+    fetch('/admin/proxies/add', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert('代理添加成功！');
+            location.reload();
+        } else {
+            alert('添加失败：' + data.message);
+        }
+    })
+    .catch(error => {
+        alert('添加失败：' + error);
+    });
+}
+
+// 删除代理
+function removeProxy(server, port) {
+    if (!confirm(`确定要删除代理 ${server}:${port} 吗？`)) {
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('server', server);
+    formData.append('port', port);
+
+    fetch('/admin/proxies/remove', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert('代理删除成功！');
+            location.reload();
+        } else {
+            alert('删除失败：' + data.message);
+        }
+    })
+    .catch(error => {
+        alert('删除失败：' + error);
+    });
+}
+
+// 测试代理
+function testProxy(server, port) {
+    alert('代理测试功能开发中...');
+}
+</script>
+{% endblock %}

@@ -17,11 +17,62 @@ from shared.config.settings import settings, load_env_file
 from shared.database.init import db
 from shared.utils.logger import logger
 from shared.utils.license import LicenseManager
+from shared.utils.authorization import auth_manager
 
 from modules.tgapi.core import tgapi_manager
 from modules.account_manager.manager import account_manager
 from modules.converter.converter import conversion_pipeline
 from modules.auto_gen.autogen import autogen_tool
+
+
+# 授权检查装饰器
+def require_authorization(func):
+    """要求用户授权的装饰器"""
+    async def wrapper(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        telegram_id = user.id
+        username = user.username
+        full_name = user.full_name
+
+        # 检查授权
+        authorized, message, user_info = auth_manager.check_authorization(telegram_id)
+
+        if not authorized:
+            # 记录未授权访问
+            command = update.message.text if update.message else None
+            auth_manager.log_unauthorized_access(
+                telegram_id=telegram_id,
+                username=username,
+                full_name=full_name,
+                command=command,
+                message=update.message.text if update.message else None
+            )
+
+            # 发送未授权消息
+            unauthorized_message = f"""
+⚠️ **未授权访问**
+
+{message}
+
+**您的信息**：
+👤 Telegram ID: `{telegram_id}`
+📛 用户名: @{username or '无'}
+👨 全名: {full_name or '无'}
+
+**如何获取授权？**
+1️⃣ 联系管理员
+2️⃣ 提供您的 Telegram ID: `{telegram_id}`
+3️⃣ 完成付款后管理员将为您授权
+
+💡 授权后即可使用机器人的所有功能！
+"""
+            await update.message.reply_text(unauthorized_message)
+            return
+
+        # 授权通过，执行原函数
+        return await func(self, update, context)
+
+    return wrapper
 
 
 class TGBotManager:
@@ -77,6 +128,7 @@ class TGBotManager:
 
         await update.message.reply_text(welcome_text, reply_markup=reply_markup)
 
+    @require_authorization
     async def menu_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """菜单命令"""
         keyboard = [

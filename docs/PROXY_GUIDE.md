@@ -24,17 +24,19 @@
 
 ## 🔧 MTProxy代理配置
 
-### 你的新加坡高速代理
+### MTProxy链接格式
 
 ```python
-# 代理信息
-Server: 27.152.180.236
-Port: 41101
-Secret: ee38df3159cdeec7bf5122293ab5c28c4e617a7572652e6d6963726f736f66742e636f6d
+# MTProxy链接格式示例
+https://t.me/proxy?server=YOUR_SERVER&port=YOUR_PORT&secret=YOUR_SECRET
 
-# MTProxy链接
-https://t.me/proxy?server=27.152.180.236&port=41101&secret=ee38df3159cdeec7bf5122293ab5c28c4e617a7572652e6d6963726f736f66742e636f6d
+# 示例
+# Server: 1.2.3.4
+# Port: 443
+# Secret: your_secret_here
 ```
+
+**注意**: 代理链接请通过管理后台添加，不要硬编码在代码中
 
 ### 使用方法
 
@@ -43,8 +45,8 @@ https://t.me/proxy?server=27.152.180.236&port=41101&secret=ee38df3159cdeec7bf512
 ```python
 from shared.utils.proxy_manager import proxy_pool
 
-# 添加你的新加坡代理
-mtproxy_link = "https://t.me/proxy?server=27.152.180.236&port=41101&secret=ee38df3159cdeec7bf5122293ab5c28c4e617a7572652e6d6963726f736f66742e636f6d"
+# 添加MTProxy代理（从管理后台获取链接）
+mtproxy_link = "https://t.me/proxy?server=YOUR_SERVER&port=YOUR_PORT&secret=YOUR_SECRET"
 
 proxy_pool.add_mtproxy_link(mtproxy_link)
 
@@ -71,9 +73,9 @@ from shared.utils.proxy_manager import ProxyManager
 # 手动配置代理
 proxy_config = {
     'type': 'mtproto',
-    'server': '27.152.180.236',
-    'port': 41101,
-    'secret': 'ee38df3159cdeec7bf5122293ab5c28c4e617a7572652e6d6963726f736f66742e636f6d'
+    'server': 'YOUR_SERVER',
+    'port': YOUR_PORT,
+    'secret': 'YOUR_SECRET'
 }
 
 # 创建Telethon代理
@@ -202,11 +204,11 @@ class AccountManager:
 ```python
 from shared.utils.proxy_manager import proxy_pool
 
-# 添加多个MTProxy代理
+# 添加多个MTProxy代理（从管理后台配置）
 proxies = [
-    "https://t.me/proxy?server=27.152.180.236&port=41101&secret=ee38df3159...",  # 新加坡
-    "https://t.me/proxy?server=1.2.3.4&port=443&secret=abcd...",                 # 美国
-    "https://t.me/proxy?server=5.6.7.8&port=443&secret=efgh...",                 # 欧洲
+    "https://t.me/proxy?server=SERVER1&port=PORT1&secret=SECRET1",  # 代理1
+    "https://t.me/proxy?server=SERVER2&port=PORT2&secret=SECRET2",  # 代理2
+    "https://t.me/proxy?server=SERVER3&port=PORT3&secret=SECRET3",  # 代理3
 ]
 
 for proxy_link in proxies:
@@ -219,10 +221,10 @@ print(f"代理池数量: {proxy_pool.count()}")
 
 ```python
 # 每次获取不同的代理（轮询）
-proxy1 = proxy_pool.get_next_proxy()  # 新加坡
-proxy2 = proxy_pool.get_next_proxy()  # 美国
-proxy3 = proxy_pool.get_next_proxy()  # 欧洲
-proxy4 = proxy_pool.get_next_proxy()  # 回到新加坡
+proxy1 = proxy_pool.get_next_proxy()  # 代理1
+proxy2 = proxy_pool.get_next_proxy()  # 代理2
+proxy3 = proxy_pool.get_next_proxy()  # 代理3
+proxy4 = proxy_pool.get_next_proxy()  # 回到代理1
 ```
 
 ### 随机获取代理
@@ -239,8 +241,8 @@ proxy = proxy_pool.get_random_proxy()
 ```python
 from shared.utils.proxy_manager import ProxyManager
 
-# 测试你的新加坡代理
-mtproxy_link = "https://t.me/proxy?server=27.152.180.236&port=41101&secret=ee38df3159..."
+# 测试代理
+mtproxy_link = "https://t.me/proxy?server=YOUR_SERVER&port=YOUR_PORT&secret=YOUR_SECRET"
 
 proxy_config = ProxyManager.parse_mtproxy_link(mtproxy_link)
 
@@ -266,14 +268,14 @@ else:
 ```bash
 # 代理配置
 
-# 默认MTProxy代理（可选）
-DEFAULT_MTPROXY_LINK=https://t.me/proxy?server=27.152.180.236&port=41101&secret=ee38df3159cdeec7bf5122293ab5c28c4e617a7572652e6d6963726f736f66742e636f6d
+# 默认MTProxy代理（可选 - 建议通过管理后台配置）
+# DEFAULT_MTPROXY_LINK=https://t.me/proxy?server=YOUR_SERVER&port=YOUR_PORT&secret=YOUR_SECRET
 
-# 是否启用代理
-PROXY_ENABLED=true
+# 是否启用代理（可选，不添加代理也能正常运行）
+PROXY_ENABLED=false
 
-# 代理池（多个代理，用|分隔）
-PROXY_POOL=https://t.me/proxy?server=27.152.180.236&port=41101&secret=xxx|https://t.me/proxy?server=1.2.3.4&port=443&secret=yyy
+# 代理池（多个代理，用|分隔 - 建议通过管理后台配置）
+# PROXY_POOL=https://t.me/proxy?server=SERVER1&port=PORT1&secret=SECRET1|https://t.me/proxy?server=SERVER2&port=PORT2&secret=SECRET2
 
 # SOCKS5代理（可选）
 SOCKS5_PROXY=socks5://user:pass@127.0.0.1:1080
@@ -291,22 +293,25 @@ from modules.tgapi.core import tgapi_manager
 from shared.utils.proxy_manager import proxy_pool
 
 async def main():
-    # 1. 添加新加坡高速代理
-    proxy_pool.add_mtproxy_link(
-        "https://t.me/proxy?server=27.152.180.236&port=41101&secret=ee38df3159..."
-    )
+    # 1. 添加MTProxy代理（从管理后台配置）
+    # proxy_pool.add_mtproxy_link(
+    #     "https://t.me/proxy?server=YOUR_SERVER&port=YOUR_PORT&secret=YOUR_SECRET"
+    # )
 
-    # 2. 创建TGAPI链接（使用代理）
+    # 2. 创建TGAPI链接（可选使用代理）
     success, api_url, token = await tgapi_manager.create_api_link(
         session_string="YOUR_SESSION",
         api_id=12345,
         api_hash="YOUR_HASH",
-        proxy_link=proxy_pool.get_next_proxy()
+        proxy_link=proxy_pool.get_next_proxy()  # 如果代理池为空，将使用直连
     )
 
     if success:
         print(f"✅ API链接: {api_url}")
-        print(f"✅ 使用代理: 新加坡高速MTProxy")
+        if proxy_pool.count() > 0:
+            print(f"✅ 使用代理模式")
+        else:
+            print(f"✅ 使用直连模式")
 
 asyncio.run(main())
 ```
@@ -316,21 +321,21 @@ asyncio.run(main())
 ```python
 from shared.utils.proxy_manager import proxy_pool
 
-# 添加多个代理
-proxies = [
-    "https://t.me/proxy?server=27.152.180.236&port=41101&secret=...",  # 新加坡
-    "https://t.me/proxy?server=1.2.3.4&port=443&secret=...",            # 美国
-    "https://t.me/proxy?server=5.6.7.8&port=443&secret=...",            # 欧洲
-]
+# 添加多个代理（从管理后台配置）
+# proxies = [
+#     "https://t.me/proxy?server=SERVER1&port=PORT1&secret=SECRET1",
+#     "https://t.me/proxy?server=SERVER2&port=PORT2&secret=SECRET2",
+#     "https://t.me/proxy?server=SERVER3&port=PORT3&secret=SECRET3",
+# ]
+#
+# for link in proxies:
+#     proxy_pool.add_mtproxy_link(link)
 
-for link in proxies:
-    proxy_pool.add_mtproxy_link(link)
-
-# 批量操作，每个账号使用不同代理
+# 批量操作，每个账号可选使用不同代理
 accounts = [...]
 for account in accounts:
-    proxy = proxy_pool.get_next_proxy()  # 轮询获取代理
-    # 使用proxy处理account
+    proxy = proxy_pool.get_next_proxy()  # 轮询获取代理（如果代理池为空返回None）
+    # 使用proxy处理account（proxy为None时使用直连）
 ```
 
 ---
@@ -345,14 +350,14 @@ PROXY_ENABLED=false
 
 ### 生产环境（国内）
 ```bash
-# 使用MTProxy（推荐）
-PROXY_ENABLED=true
-DEFAULT_MTPROXY_LINK=https://t.me/proxy?server=27.152.180.236&port=41101&secret=ee38df3159...
+# 使用MTProxy（推荐通过管理后台配置）
+PROXY_ENABLED=false  # 代理通过管理后台动态添加
+# DEFAULT_MTPROXY_LINK=  # 建议在管理后台配置
 ```
 
 ### 生产环境（海外）
 ```bash
-# 可以不使用代理
+# 可以不使用代理（直连即可）
 PROXY_ENABLED=false
 ```
 
@@ -366,24 +371,33 @@ PROXY_ENABLED=false
 | SOCKS5 | ⚡⚡⚡⚡ | ⭐⭐⭐⭐ | ⭐⭐⭐ | ✅ 推荐 |
 | HTTP | ⚡⚡⚡ | ⭐⭐⭐ | ⭐⭐ | ⚠️ 备选 |
 
-**你的新加坡高速MTProxy是最佳选择！** ⭐
+**MTProxy是生产环境的最佳选择！** ⭐（请通过管理后台配置代理）
 
 ---
 
 ## 💡 最佳实践
 
-1. **使用MTProxy**：优先使用你的新加坡高速MTProxy
-2. **配置代理池**：准备多个不同地区的代理备用
-3. **定期测试**：定期测试代理可用性
-4. **轮询使用**：批量操作时轮询使用不同代理
-5. **错误重试**：代理失败时自动切换到下一个
+1. **使用MTProxy**：优先使用MTProxy代理（速度最快、最稳定）
+2. **管理后台配置**：通过Web管理后台动态添加/删除代理
+3. **配置代理池**：准备多个不同地区的代理备用
+4. **定期测试**：定期测试代理可用性
+5. **轮询使用**：批量操作时轮询使用不同代理
+6. **错误重试**：代理失败时自动切换到下一个
+7. **可选使用**：系统支持无代理直连模式
 
 ---
 
-**✅ 你的新加坡高速MTProxy已完全集成到系统中！**
+**✅ 代理管理系统已完全集成！**
 
 使用方法：
 ```python
-proxy_pool.add_mtproxy_link("https://t.me/proxy?server=27.152.180.236...")
+# 方式1: 通过管理后台添加（推荐）
+# 访问 http://your-domain/admin/proxies 添加代理
+
+# 方式2: 通过代码添加
+from shared.utils.proxy_manager import proxy_pool
+proxy_pool.add_mtproxy_link("https://t.me/proxy?server=YOUR_SERVER&port=YOUR_PORT&secret=YOUR_SECRET")
 ```
+
+**注意**：不添加代理时，系统将使用直连模式运行
 

@@ -1,0 +1,77 @@
+{% extends "admin/base.html" %}
+
+{% block title %}系统日志{% endblock %}
+{% block page_title %}系统日志{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">
+        <i class="bi bi-file-text"></i> 系统日志
+    </h1>
+    <p class="text-muted">查看系统操作日志和错误记录</p>
+</div>
+
+<!-- 日志类型切换 -->
+<div class="card border-0 shadow-sm mb-4">
+    <div class="card-body">
+        <div class="btn-group" role="group">
+            <a href="/admin/logs?log_type=operation" class="btn {% if log_type == 'operation' %}btn-primary{% else %}btn-outline-primary{% endif %}">
+                操作日志
+            </a>
+            <a href="/admin/logs?log_type=error" class="btn {% if log_type == 'error' %}btn-primary{% else %}btn-outline-primary{% endif %}">
+                错误日志
+            </a>
+            <a href="/admin/logs?log_type=access" class="btn {% if log_type == 'access' %}btn-primary{% else %}btn-outline-primary{% endif %}">
+                访问日志
+            </a>
+        </div>
+    </div>
+</div>
+
+<div class="card border-0 shadow-sm">
+    <div class="card-header bg-white">
+        <h5 class="mb-0"><i class="bi bi-list-ul"></i> 日志列表 (最近200条)</h5>
+    </div>
+    <div class="card-body p-0">
+        {% if logs %}
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>操作类型</th>
+                        <th>详细信息</th>
+                        <th>结果</th>
+                        <th>时间</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for log in logs %}
+                    <tr>
+                        <td>{{ log.id }}</td>
+                        <td><span class="badge bg-info">{{ log.operation }}</span></td>
+                        <td class="text-truncate" style="max-width: 400px;">{{ log.details or '-' }}</td>
+                        <td>
+                            {% if log.result == 'success' %}
+                                <span class="status-badge bg-success">成功</span>
+                            {% elif log.result == 'failed' %}
+                                <span class="status-badge bg-danger">失败</span>
+                            {% elif log.result == 'partial' %}
+                                <span class="status-badge bg-warning">部分成功</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ log.created_at }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="text-center py-5">
+            <i class="bi bi-inbox" style="font-size: 4rem; color: #ccc;"></i>
+            <p class="text-muted mt-3">暂无日志记录</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

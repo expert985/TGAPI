@@ -1,0 +1,210 @@
+{% extends "admin/base.html" %}
+
+{% block title %}仪表板{% endblock %}
+{% block page_title %}系统仪表板{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">
+        <i class="bi bi-speedometer2"></i> 系统概览
+    </h1>
+    <p class="text-muted">欢迎回来，{{ user }}！当前时间：{{ current_time }}</p>
+</div>
+
+<!-- 统计卡片 -->
+<div class="row g-4 mb-4">
+    <!-- 账号总数 -->
+    <div class="col-md-3">
+        <div class="card stat-card border-0 shadow-sm">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="text-muted mb-2">账号总数</h6>
+                        <h2 class="mb-0">{{ stats.accounts }}</h2>
+                    </div>
+                    <div class="icon text-primary">
+                        <i class="bi bi-people-fill"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 活跃TGAPI会话 -->
+    <div class="col-md-3">
+        <div class="card stat-card border-0 shadow-sm">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="text-muted mb-2">活跃会话</h6>
+                        <h2 class="mb-0">{{ active_sessions }}</h2>
+                    </div>
+                    <div class="icon text-success">
+                        <i class="bi bi-link-45deg"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 租户数量 -->
+    <div class="col-md-3">
+        <div class="card stat-card border-0 shadow-sm">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="text-muted mb-2">租户数量</h6>
+                        <h2 class="mb-0">{{ stats.tenants }}</h2>
+                    </div>
+                    <div class="icon text-warning">
+                        <i class="bi bi-building"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 代理数量 -->
+    <div class="col-md-3">
+        <div class="card stat-card border-0 shadow-sm">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="text-muted mb-2">代理数量</h6>
+                        <h2 class="mb-0">{{ proxy_stats.count }}</h2>
+                    </div>
+                    <div class="icon text-info">
+                        <i class="bi bi-hdd-network-fill"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 快速操作 -->
+<div class="row g-4 mb-4">
+    <div class="col-md-6">
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white">
+                <h5 class="mb-0"><i class="bi bi-lightning-fill"></i> 快速操作</h5>
+            </div>
+            <div class="card-body">
+                <div class="d-grid gap-2">
+                    <a href="/admin/proxies" class="btn btn-outline-primary">
+                        <i class="bi bi-plus-circle"></i> 添加代理
+                    </a>
+                    <a href="/admin/tenants" class="btn btn-outline-success">
+                        <i class="bi bi-building"></i> 创建租户
+                    </a>
+                    <a href="/admin/accounts" class="btn btn-outline-info">
+                        <i class="bi bi-people"></i> 查看账号
+                    </a>
+                    <a href="/admin/logs" class="btn btn-outline-secondary">
+                        <i class="bi bi-file-text"></i> 查看日志
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6">
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white">
+                <h5 class="mb-0"><i class="bi bi-hdd-network"></i> 代理池状态</h5>
+            </div>
+            <div class="card-body">
+                {% if proxy_stats.count > 0 %}
+                <div class="alert alert-success">
+                    <i class="bi bi-check-circle-fill"></i> 代理池运行正常，共 {{ proxy_stats.count }} 个代理
+                </div>
+                <div class="list-group">
+                    {% for proxy in proxy_stats.proxies[:5] %}
+                    <div class="list-group-item d-flex justify-content-between align-items-center">
+                        <span class="text-truncate">{{ proxy }}</span>
+                        <span class="badge bg-success">在线</span>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% if proxy_stats.count > 5 %}
+                <div class="mt-2 text-center">
+                    <a href="/admin/proxies" class="btn btn-sm btn-link">查看全部 {{ proxy_stats.count }} 个代理</a>
+                </div>
+                {% endif %}
+                {% else %}
+                <div class="alert alert-warning">
+                    <i class="bi bi-exclamation-triangle-fill"></i> 代理池为空，系统将使用直连模式
+                </div>
+                <a href="/admin/proxies" class="btn btn-primary">
+                    <i class="bi bi-plus-circle"></i> 添加第一个代理
+                </a>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 系统信息 -->
+<div class="row">
+    <div class="col-12">
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white">
+                <h5 class="mb-0"><i class="bi bi-info-circle"></i> 系统信息</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <table class="table table-sm">
+                            <tr>
+                                <th width="40%">系统版本</th>
+                                <td>v1.0.0</td>
+                            </tr>
+                            <tr>
+                                <th>数据库类型</th>
+                                <td>SQLite / MySQL</td>
+                            </tr>
+                            <tr>
+                                <th>缓存系统</th>
+                                <td>Redis</td>
+                            </tr>
+                        </table>
+                    </div>
+                    <div class="col-md-6">
+                        <table class="table table-sm">
+                            <tr>
+                                <th width="40%">账号总数</th>
+                                <td>{{ stats.accounts }}</td>
+                            </tr>
+                            <tr>
+                                <th>会话总数</th>
+                                <td>{{ stats.tgapi_sessions }}</td>
+                            </tr>
+                            <tr>
+                                <th>租户总数</th>
+                                <td>{{ stats.tenants }}</td>
+                            </tr>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// 自动刷新统计数据（每30秒）
+setInterval(function() {
+    fetch('/admin/api/stats')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                // 更新统计数据
+                console.log('统计数据已更新', data.stats);
+            }
+        })
+        .catch(error => console.error('更新失败:', error));
+}, 30000);
+</script>
+{% endblock %}

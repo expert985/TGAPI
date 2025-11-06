@@ -1,0 +1,165 @@
+{% extends "admin/base.html" %}
+
+{% block title %}租户管理{% endblock %}
+{% block page_title %}租户管理{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div class="d-flex justify-content-between align-items-center">
+        <div>
+            <h1 class="page-title">
+                <i class="bi bi-building"></i> 租户管理
+            </h1>
+            <p class="text-muted">管理系统租户和许可证</p>
+        </div>
+        <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createTenantModal">
+            <i class="bi bi-plus-circle"></i> 创建租户
+        </button>
+    </div>
+</div>
+
+<!-- 租户列表 -->
+<div class="card border-0 shadow-sm">
+    <div class="card-header bg-white">
+        <h5 class="mb-0"><i class="bi bi-list-ul"></i> 租户列表</h5>
+    </div>
+    <div class="card-body p-0">
+        {% if tenants %}
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>租户代码</th>
+                        <th>租户名称</th>
+                        <th>许可证类型</th>
+                        <th>账号配额</th>
+                        <th>会话配额</th>
+                        <th>过期时间</th>
+                        <th>状态</th>
+                        <th>创建时间</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for tenant in tenants %}
+                    <tr>
+                        <td><code>{{ tenant.tenant_code }}</code></td>
+                        <td>{{ tenant.tenant_name }}</td>
+                        <td>
+                            {% if tenant.license_type == 'lifetime' %}
+                                <span class="badge bg-success">永久</span>
+                            {% elif tenant.license_type == 'yearly' %}
+                                <span class="badge bg-primary">年付</span>
+                            {% elif tenant.license_type == 'monthly' %}
+                                <span class="badge bg-info">月付</span>
+                            {% elif tenant.license_type == 'trial' %}
+                                <span class="badge bg-warning">试用</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ tenant.max_accounts }}</td>
+                        <td>{{ tenant.max_tgapi_sessions }}</td>
+                        <td>
+                            {% if tenant.expire_at %}
+                                {{ tenant.expire_at }}
+                            {% else %}
+                                <span class="text-muted">永不过期</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if tenant.status == 'active' %}
+                                <span class="status-badge bg-success">激活</span>
+                            {% elif tenant.status == 'suspended' %}
+                                <span class="status-badge bg-warning">暂停</span>
+                            {% elif tenant.status == 'expired' %}
+                                <span class="status-badge bg-danger">过期</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ tenant.created_at }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="text-center py-5">
+            <i class="bi bi-inbox" style="font-size: 4rem; color: #ccc;"></i>
+            <p class="text-muted mt-3">暂无租户</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- 创建租户模态框 -->
+<div class="modal fade" id="createTenantModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-plus-circle"></i> 创建新租户</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="createTenantForm">
+                    <div class="mb-3">
+                        <label class="form-label">租户代码</label>
+                        <input type="text" class="form-control" name="tenant_code" required
+                               placeholder="例如：TENANT001">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">租户名称</label>
+                        <input type="text" class="form-control" name="tenant_name" required
+                               placeholder="例如：示例公司">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">许可证类型</label>
+                        <select class="form-select" name="license_type" required>
+                            <option value="trial">试用版</option>
+                            <option value="monthly">月付版</option>
+                            <option value="yearly" selected>年付版</option>
+                            <option value="lifetime">永久版</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">最大账号数</label>
+                        <input type="number" class="form-control" name="max_accounts" value="10" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">最大TGAPI会话数</label>
+                        <input type="number" class="form-control" name="max_tgapi_sessions" value="5" required>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" onclick="submitCreateTenant()">
+                    <i class="bi bi-check-circle"></i> 创建
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function submitCreateTenant() {
+    const form = document.getElementById('createTenantForm');
+    const formData = new FormData(form);
+
+    fetch('/admin/tenants/create', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert('租户创建成功！\n\n许可证密钥：\n' + data.license_key);
+            location.reload();
+        } else {
+            alert('创建失败：' + data.message);
+        }
+    })
+    .catch(error => {
+        alert('创建失败：' + error);
+    });
+}
+</script>
+{% endblock %}
