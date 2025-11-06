@@ -1,27 +1,69 @@
 """
-数据库初始化模块
+数据库初始化模块 - 支持 MySQL 8.0+ 和 SQLite
 """
-import sqlite3
 import os
+import pymysql
+import sqlite3
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union, Any
 from datetime import datetime
+from contextlib import contextmanager
 
 class Database:
-    def __init__(self, db_path: str = "data/bot.db"):
-        self.db_path = db_path
-        self.conn: Optional[sqlite3.Connection] = None
-        self._ensure_data_dir()
+    def __init__(self, db_type: str = "sqlite", **kwargs):
+        """
+        初始化数据库连接
+
+        Args:
+            db_type: 数据库类型 ('mysql' or 'sqlite')
+
+            MySQL参数:
+                host: MySQL主机
+                port: MySQL端口
+                user: 用户名
+                password: 密码
+                database: 数据库名
+                charset: 字符集
+
+            SQLite参数:
+                db_path: 数据库文件路径
+        """
+        self.db_type = db_type.lower()
+        self.conn: Optional[Union[pymysql.Connection, sqlite3.Connection]] = None
+
+        if self.db_type == "mysql":
+            self.config = {
+                'host': kwargs.get('host', 'localhost'),
+                'port': kwargs.get('port', 3306),
+                'user': kwargs.get('user', 'root'),
+                'password': kwargs.get('password', ''),
+                'database': kwargs.get('database', 'tgbot'),
+                'charset': kwargs.get('charset', 'utf8mb4'),
+                'cursorclass': pymysql.cursors.DictCursor,
+                'autocommit': False
+            }
+        elif self.db_type == "sqlite":
+            self.db_path = kwargs.get('db_path', 'data/bot.db')
+            self._ensure_data_dir()
+        else:
+            raise ValueError(f"Unsupported database type: {db_type}")
 
     def _ensure_data_dir(self):
-        """确保数据目录存在"""
-        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+        """确保SQLite数据目录存在"""
+        if self.db_type == "sqlite":
+            Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
 
     def connect(self):
         """连接到数据库"""
         if not self.conn:
-            self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
-            self.conn.row_factory = sqlite3.Row
+            if self.db_type == "mysql":
+                self.conn = pymysql.connect(**self.config)
+            else:  # sqlite
+                self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+                self.conn.row_factory = sqlite3.Row
+                # 启用WAL模式以支持并发
+                self.conn.execute("PRAGMA journal_mode=WAL")
+                self.conn.execute("PRAGMA synchronous=NORMAL")
         return self.conn
 
     def close(self):
@@ -30,19 +72,87 @@ class Database:
             self.conn.close()
             self.conn = None
 
+    @contextmanager
+    def get_cursor(self):
+        """获取游标的上下文管理器"""
+        conn = self.connect()
+        cursor = conn.cursor()
+        try:
+            yield cursor
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            cursor.close()
+
     def initialize(self):
         """初始化数据库结构"""
-        schema_path = Path(__file__).parent / "schema.sql"
-        with open(schema_path, 'r', encoding='utf-8') as f:
-            schema_sql = f.read()
+        if self.db_type == "mysql":
+            self._initialize_mysql()
+        else:
+            self._initialize_sqlite()
+
+    def _initialize_mysql(self):
+        """初始化MySQL数据库"""
+        schema_files = [
+            "mysql_init.sql",
+            "bot_pool_schema.sql",
+            "authorized_users_schema_mysql.sql"  # MySQL版本
+        ]
+
+        print(f"🔧 正在初始化 MySQL 数据库: {self.config['database']}")
+
+        with self.get_cursor() as cursor:
+            for schema_file in schema_files:
+                schema_path = Path(__file__).parent / schema_file
+                if schema_path.exists():
+                    print(f"   📄 执行: {schema_file}")
+                    with open(schema_path, 'r', encoding='utf-8') as f:
+                        # 分割SQL语句（MySQL不支持executescript）
+                        sql_commands = f.read().split(';')
+                        for command in sql_commands:
+                            command = command.strip()
+                            if command and not command.startswith('--'):
+                                try:
+                                    cursor.execute(command)
+                                except Exception as e:
+                                    # 忽略已存在的表等警告
+                                    if "already exists" not in str(e).lower():
+                                        print(f"      ⚠️  Warning: {e}")
+
+        print(f"✅ MySQL 数据库初始化完成: {self.config['host']}:{self.config['port']}/{self.config['database']}")
+
+    def _initialize_sqlite(self):
+        """初始化SQLite数据库"""
+        schema_files = [
+            "schema.sql",
+            "authorized_users_schema.sql",  # SQLite版本
+        ]
+
+        print(f"🔧 正在初始化 SQLite 数据库: {self.db_path}")
 
         conn = self.connect()
-        conn.executescript(schema_sql)
+        for schema_file in schema_files:
+            schema_path = Path(__file__).parent / schema_file
+            if schema_path.exists():
+                print(f"   📄 执行: {schema_file}")
+                with open(schema_path, 'r', encoding='utf-8') as f:
+                    schema_sql = f.read()
+                    conn.executescript(schema_sql)
+
         conn.commit()
-        print(f"✅ 数据库初始化完成: {self.db_path}")
+        print(f"✅ SQLite 数据库初始化完成: {self.db_path}")
+
+    def _convert_placeholders(self, query: str) -> str:
+        """转换占位符：SQLite用?, MySQL用%s"""
+        if self.db_type == "mysql":
+            return query.replace('?', '%s')
+        return query
 
     def execute(self, query: str, params: tuple = ()):
         """执行SQL查询"""
+        query = self._convert_placeholders(query)
         conn = self.connect()
         cursor = conn.cursor()
         cursor.execute(query, params)
@@ -51,13 +161,23 @@ class Database:
 
     def fetchone(self, query: str, params: tuple = ()):
         """查询单条记录"""
-        cursor = self.execute(query, params)
-        return cursor.fetchone()
+        query = self._convert_placeholders(query)
+        conn = self.connect()
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        result = cursor.fetchone()
+        cursor.close()
+        return result
 
     def fetchall(self, query: str, params: tuple = ()):
         """查询多条记录"""
-        cursor = self.execute(query, params)
-        return cursor.fetchall()
+        query = self._convert_placeholders(query)
+        conn = self.connect()
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        results = cursor.fetchall()
+        cursor.close()
+        return results
 
     # ========== 账号管理 ==========
 
@@ -174,8 +294,29 @@ class Database:
         return stats
 
 
+# 全局数据库实例（从环境变量加载配置）
+def create_database_from_env():
+    """从环境变量创建数据库实例"""
+    db_type = os.getenv('DATABASE_TYPE', 'sqlite').lower()
+
+    if db_type == 'mysql':
+        return Database(
+            db_type='mysql',
+            host=os.getenv('MYSQL_HOST', 'localhost'),
+            port=int(os.getenv('MYSQL_PORT', 3306)),
+            user=os.getenv('MYSQL_USER', 'root'),
+            password=os.getenv('MYSQL_PASSWORD', ''),
+            database=os.getenv('MYSQL_DATABASE', 'tgbot'),
+            charset=os.getenv('MYSQL_CHARSET', 'utf8mb4')
+        )
+    else:  # sqlite
+        return Database(
+            db_type='sqlite',
+            db_path=os.getenv('DATABASE_PATH', 'data/bot.db')
+        )
+
 # 全局数据库实例
-db = Database()
+db = create_database_from_env()
 
 if __name__ == "__main__":
     # 初始化数据库
