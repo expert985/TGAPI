@@ -148,6 +148,143 @@ async def admin_dashboard(request: Request):
     })
 
 
+@admin_router.get("/api/stats/growth")
+async def account_growth_stats(request: Request, days: int = 30):
+    """账号增长趋势统计API"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return JSONResponse({"success": False, "message": "未认证"}, status_code=401)
+
+    try:
+        from datetime import timedelta
+        # 获取过去N天的账号创建数据
+        dates = []
+        counts = []
+
+        for i in range(days - 1, -1, -1):
+            date = (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
+            count = db.fetchone(
+                """SELECT COUNT(*) as count FROM accounts
+                   WHERE DATE(created_at) = ?""",
+                (date,)
+            )
+            dates.append(date)
+            counts.append(count['count'] if count else 0)
+
+        return JSONResponse({
+            "success": True,
+            "data": {
+                "labels": dates,
+                "values": counts
+            }
+        })
+    except Exception as e:
+        logger.error(f"获取账号增长统计失败: {str(e)}")
+        return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
+
+@admin_router.get("/api/stats/tgapi-calls")
+async def tgapi_call_stats(request: Request, days: int = 7):
+    """TGAPI调用统计API"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return JSONResponse({"success": False, "message": "未认证"}, status_code=401)
+
+    try:
+        from datetime import timedelta
+        # 获取过去N天的TGAPI会话使用统计
+        dates = []
+        login_counts = []
+
+        for i in range(days - 1, -1, -1):
+            date = (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
+            count = db.fetchone(
+                """SELECT SUM(login_count) as total FROM tgapi_sessions
+                   WHERE DATE(created_at) <= ?""",
+                (date,)
+            )
+            dates.append(date)
+            login_counts.append(count['total'] if count and count['total'] else 0)
+
+        return JSONResponse({
+            "success": True,
+            "data": {
+                "labels": dates,
+                "values": login_counts
+            }
+        })
+    except Exception as e:
+        logger.error(f"获取TGAPI调用统计失败: {str(e)}")
+        return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
+
+@admin_router.get("/api/stats/tenant-usage")
+async def tenant_usage_stats(request: Request):
+    """租户使用统计API"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return JSONResponse({"success": False, "message": "未认证"}, status_code=401)
+
+    try:
+        # 获取授权等级分布
+        level_stats = db.fetchall(
+            """SELECT authorization_level, COUNT(*) as count
+               FROM authorized_users
+               WHERE status = 'active'
+               GROUP BY authorization_level"""
+        )
+
+        levels = []
+        counts = []
+        for stat in level_stats:
+            levels.append(stat['authorization_level'].upper())
+            counts.append(stat['count'])
+
+        return JSONResponse({
+            "success": True,
+            "data": {
+                "labels": levels,
+                "values": counts
+            }
+        })
+    except Exception as e:
+        logger.error(f"获取租户使用统计失败: {str(e)}")
+        return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
+
+@admin_router.get("/api/stats/account-status")
+async def account_status_stats(request: Request):
+    """账号状态分布统计API"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return JSONResponse({"success": False, "message": "未认证"}, status_code=401)
+
+    try:
+        # 获取账号状态分布
+        status_stats = db.fetchall(
+            """SELECT status, COUNT(*) as count
+               FROM accounts
+               GROUP BY status"""
+        )
+
+        statuses = []
+        counts = []
+        for stat in status_stats:
+            statuses.append(stat['status'].upper())
+            counts.append(stat['count'])
+
+        return JSONResponse({
+            "success": True,
+            "data": {
+                "labels": statuses,
+                "values": counts
+            }
+        })
+    except Exception as e:
+        logger.error(f"获取账号状态统计失败: {str(e)}")
+        return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
+
 # ==================== 代理管理 ====================
 
 @admin_router.get("/proxies", response_class=HTMLResponse)
@@ -735,6 +872,161 @@ async def export_accounts(
             "request": request,
             "user": user,
             "error": f"导出失败: {str(e)}"
+        })
+
+
+@admin_router.get("/export/excel")
+async def export_all_data_excel(request: Request):
+    """导出完整数据报表（Excel格式）"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/admin/login", status_code=status.HTTP_302_FOUND)
+
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment
+        import io
+        from fastapi.responses import StreamingResponse
+
+        # 创建Excel工作簿
+        wb = Workbook()
+
+        # === 工作表1: 账号统计 ===
+        ws1 = wb.active
+        ws1.title = "账号统计"
+
+        # 设置表头样式
+        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+        header_font = Font(color="FFFFFF", bold=True)
+
+        # 表头
+        headers = ['ID', '手机号', '用户名', 'Session类型', '状态', '租户ID', '创建时间', '最后检查']
+        for col_num, header in enumerate(headers, 1):
+            cell = ws1.cell(row=1, column=col_num)
+            cell.value = header
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal='center')
+
+        # 获取所有账号
+        accounts = db.fetchall("SELECT * FROM accounts ORDER BY created_at DESC")
+        for row_num, account in enumerate(accounts, 2):
+            ws1.cell(row=row_num, column=1).value = account['id']
+            ws1.cell(row=row_num, column=2).value = account['phone']
+            ws1.cell(row=row_num, column=3).value = account.get('username', '')
+            ws1.cell(row=row_num, column=4).value = account['session_type']
+            ws1.cell(row=row_num, column=5).value = account['status']
+            ws1.cell(row=row_num, column=6).value = account.get('tenant_id', '')
+            ws1.cell(row=row_num, column=7).value = account['created_at']
+            ws1.cell(row=row_num, column=8).value = account.get('last_check', '')
+
+        # 自动调整列宽
+        for column in ws1.columns:
+            max_length = 0
+            column_letter = column[0].column_letter
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 50)
+            ws1.column_dimensions[column_letter].width = adjusted_width
+
+        # === 工作表2: 授权用户统计 ===
+        ws2 = wb.create_sheet(title="授权用户")
+
+        # 表头
+        headers = ['TG用户ID', '用户名', '全名', '授权等级', '时长类型', '状态', '过期时间', '授权时间']
+        for col_num, header in enumerate(headers, 1):
+            cell = ws2.cell(row=1, column=col_num)
+            cell.value = header
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal='center')
+
+        # 获取所有授权用户
+        auth_users = db.fetchall("SELECT * FROM authorized_users ORDER BY created_at DESC")
+        for row_num, user_data in enumerate(auth_users, 2):
+            ws2.cell(row=row_num, column=1).value = user_data['telegram_id']
+            ws2.cell(row=row_num, column=2).value = user_data.get('username', '')
+            ws2.cell(row=row_num, column=3).value = user_data.get('full_name', '')
+            ws2.cell(row=row_num, column=4).value = user_data['authorization_level']
+            ws2.cell(row=row_num, column=5).value = user_data.get('duration_type', '')
+            ws2.cell(row=row_num, column=6).value = user_data['status']
+            ws2.cell(row=row_num, column=7).value = user_data.get('expire_date', '')
+            ws2.cell(row=row_num, column=8).value = user_data['authorization_date']
+
+        # 自动调整列宽
+        for column in ws2.columns:
+            max_length = 0
+            column_letter = column[0].column_letter
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 50)
+            ws2.column_dimensions[column_letter].width = adjusted_width
+
+        # === 工作表3: TGAPI会话统计 ===
+        ws3 = wb.create_sheet(title="TGAPI会话")
+
+        # 表头
+        headers = ['Token', '账号ID', '状态', '登录次数', '最大登录', '过期时间', '创建时间']
+        for col_num, header in enumerate(headers, 1):
+            cell = ws3.cell(row=1, column=col_num)
+            cell.value = header
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal='center')
+
+        # 获取所有TGAPI会话
+        sessions = db.fetchall("SELECT * FROM tgapi_sessions ORDER BY created_at DESC LIMIT 1000")
+        for row_num, session in enumerate(sessions, 2):
+            ws3.cell(row=row_num, column=1).value = session['token'][:20] + '...'
+            ws3.cell(row=row_num, column=2).value = session.get('account_id', '')
+            ws3.cell(row=row_num, column=3).value = session['status']
+            ws3.cell(row=row_num, column=4).value = session['login_count']
+            ws3.cell(row=row_num, column=5).value = session['max_login']
+            ws3.cell(row=row_num, column=6).value = session.get('expire_time', '')
+            ws3.cell(row=row_num, column=7).value = session['created_at']
+
+        # 自动调整列宽
+        for column in ws3.columns:
+            max_length = 0
+            column_letter = column[0].column_letter
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 50)
+            ws3.column_dimensions[column_letter].width = adjusted_width
+
+        # 保存到内存
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        filename = f"TG_Bot_Manager_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        logger.info(f"✅ 管理员 {user} 导出Excel报表")
+
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+
+    except Exception as e:
+        logger.error(f"导出Excel失败: {str(e)}")
+        return templates.TemplateResponse("admin/error.html", {
+            "request": request,
+            "user": user,
+            "error_title": "导出失败",
+            "error_message": f"无法生成Excel报表: {str(e)}"
         })
 
 
