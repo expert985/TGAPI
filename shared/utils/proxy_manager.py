@@ -287,45 +287,35 @@ proxy_pool = ProxyPool()
 
 # 示例使用
 def example_usage():
-    """示例：代理管理"""
+    """示例：代理管理（无硬编码代理）"""
 
-    # 1. 解析MTProxy链接（你提供的新加坡高速代理）
-    mtproxy_link = "https://t.me/proxy?server=27.152.180.236&port=41101&secret=ee38df3159cdeec7bf5122293ab5c28c4e617a7572652e6d6963726f736f66742e636f6d"
+    # 1. 解析MTProxy链接示例（需要从管理后台添加）
+    # mtproxy_link = "https://t.me/proxy?server=YOUR_SERVER&port=YOUR_PORT&secret=YOUR_SECRET"
+    # proxy_config = ProxyManager.parse_mtproxy_link(mtproxy_link)
+    # print(f"✅ MTProxy配置: {proxy_config}")
 
-    proxy_config = ProxyManager.parse_mtproxy_link(mtproxy_link)
-    print(f"✅ MTProxy配置: {proxy_config}")
+    # 2. 解析SOCKS5代理示例
+    # socks5_proxy = "socks5://user:pass@127.0.0.1:1080"
+    # socks5_config = ProxyManager.parse_socks5_string(socks5_proxy)
+    # if socks5_config:
+    #     proxy_pool.add_proxy(socks5_config)
 
-    # 2. 添加到代理池
-    proxy_pool.add_mtproxy_link(mtproxy_link)
+    # 3. 查看代理池状态
+    print(f"代理池数量: {proxy_pool.count()}")
+    if proxy_pool.count() > 0:
+        print(f"代理列表:")
+        for proxy in proxy_pool.list_proxies():
+            print(f"  - {proxy}")
+    else:
+        print("代理池为空 - 系统将在无代理模式下运行")
+        print("可通过管理后台添加代理")
 
-    # 3. 也可以添加SOCKS5代理
-    socks5_proxy = "socks5://user:pass@127.0.0.1:1080"
-    socks5_config = ProxyManager.parse_socks5_string(socks5_proxy)
-    if socks5_config:
-        proxy_pool.add_proxy(socks5_config)
-
-    # 4. 查看代理池
-    print(f"\n代理池数量: {proxy_pool.count()}")
-    print(f"代理列表:")
-    for proxy in proxy_pool.list_proxies():
-        print(f"  - {proxy}")
-
-    # 5. 使用代理创建客户端（示例）
-    from telethon import TelegramClient
-
+    # 4. 使用代理创建客户端示例
     proxy = proxy_pool.get_next_proxy()
     if proxy:
-        telethon_proxy = ProxyManager.create_telethon_proxy(proxy)
-
-        # 创建使用代理的客户端
-        client = TelegramClient(
-            'session_name',
-            api_id=12345,
-            api_hash='your_api_hash',
-            proxy=telethon_proxy  # 使用代理
-        )
-
-        print(f"\n✅ 客户端已配置代理: {proxy['server']}:{proxy['port']}")
+        print(f"\n✅ 可用代理: {proxy['server']}:{proxy['port']}")
+    else:
+        print("\n⚠️  无可用代理，将使用直连模式")
 
 
 if __name__ == "__main__":

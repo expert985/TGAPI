@@ -1,0 +1,1359 @@
+"""
+管理后台路由
+"""
+from fastapi import APIRouter, Request, Form, HTTPException, status
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.templating import Jinja2Templates
+from typing import Optional
+from datetime import datetime
+import json
+
+from .auth import AdminAuth, session_manager, login_tracker
+from shared.database.init import db
+from shared.utils.logger import logger
+from shared.utils.proxy_manager import proxy_pool, ProxyManager
+from shared.utils.license import LicenseManager
+from shared.utils.authorization import auth_manager
+from modules.tgapi.core import tgapi_manager
+
+# 创建路由
+admin_router = APIRouter(prefix="/admin", tags=["admin"])
+
+# 模板引擎
+templates = Jinja2Templates(directory="api/templates")
+
+# 许可证管理器
+license_manager = LicenseManager(db)
+
+
+# ==================== 认证相关 ====================
+
+@admin_router.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    """登录页面"""
+    # 如果已登录，重定向到首页
+    user = AdminAuth.get_current_user(request)
+    if user:
+        return RedirectResponse(url="/admin", status_code=status.HTTP_302_FOUND)
+
+    return templates.TemplateResponse("admin/login.html", {
+        "request": request,
+        "error": None
+    })
+
+
+@admin_router.post("/login")
+async def login(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    remember: bool = Form(False)
+):
+    """处理登录（带防爆破机制）"""
+    # 获取客户端IP
+    client_ip = request.client.host
+
+    # 检查IP是否被锁定
+    ip_locked, ip_message = login_tracker.is_locked(client_ip)
+    if ip_locked:
+        logger.warning(f"🔒 IP锁定尝试登录: {client_ip}")
+        return templates.TemplateResponse("admin/login.html", {
+            "request": request,
+            "error": ip_message
+        })
+
+    # 检查用户名是否被锁定
+    username_locked, username_message = login_tracker.is_locked(f"user:{username}")
+    if username_locked:
+        logger.warning(f"🔒 用户锁定尝试登录: {username}")
+        return templates.TemplateResponse("admin/login.html", {
+            "request": request,
+            "error": username_message
+        })
+
+    # 尝试登录
+    success, result, role = AdminAuth.login(username, password)
+
+    if not success:
+        # 登录失败，记录尝试
+        login_tracker.record_attempt(client_ip)
+        login_tracker.record_attempt(f"user:{username}")
+
+        logger.warning(f"⚠️ 登录失败: {username} from {client_ip}")
+
+        return templates.TemplateResponse("admin/login.html", {
+            "request": request,
+            "error": result
+        })
+
+    # 登录成功，清除尝试记录
+    login_tracker.clear_attempts(client_ip)
+    login_tracker.clear_attempts(f"user:{username}")
+
+    logger.info(f"✅ 登录成功: {username} from {client_ip}")
+
+    # 设置cookie
+    response = RedirectResponse(url="/admin", status_code=status.HTTP_302_FOUND)
+    response.set_cookie(
+        key="session_id",
+        value=result,
+        httponly=True,
+        max_age=86400 * 30 if remember else 86400  # 30天 or 1天
+    )
+    return response
+
+
+@admin_router.get("/logout")
+async def logout(request: Request):
+    """登出"""
+    session_id = request.cookies.get("session_id")
+    if session_id:
+        AdminAuth.logout(session_id)
+
+    response = RedirectResponse(url="/admin/login", status_code=status.HTTP_302_FOUND)
+    response.delete_cookie("session_id")
+    return response
+
+
+# ==================== 首页 ====================
+
+@admin_router.get("/", response_class=HTMLResponse)
+async def admin_dashboard(request: Request):
+    """管理后台首页"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/admin/login", status_code=status.HTTP_302_FOUND)
+
+    # 获取统计数据
+    stats = db.get_stats()
+
+    # 获取代理池信息
+    proxy_stats = {
+        "count": proxy_pool.count(),
+        "proxies": proxy_pool.list_proxies()
+    }
+
+    # 获取活跃的TGAPI会话
+    active_sessions = db.fetchall(
+        "SELECT COUNT(*) as count FROM tgapi_sessions WHERE status = 'active'"
+    )[0]["count"]
+
+    return templates.TemplateResponse("admin/dashboard.html", {
+        "request": request,
+        "user": user,
+        "stats": stats,
+        "proxy_stats": proxy_stats,
+        "active_sessions": active_sessions,
+        "current_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    })
+
+
+@admin_router.get("/api/stats/growth")
+async def account_growth_stats(request: Request, days: int = 30):
+    """账号增长趋势统计API"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return JSONResponse({"success": False, "message": "未认证"}, status_code=401)
+
+    try:
+        from datetime import timedelta
+        # 获取过去N天的账号创建数据
+        dates = []
+        counts = []
+
+        for i in range(days - 1, -1, -1):
+            date = (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
+            count = db.fetchone(
+                """SELECT COUNT(*) as count FROM accounts
+                   WHERE DATE(created_at) = ?""",
+                (date,)
+            )
+            dates.append(date)
+            counts.append(count['count'] if count else 0)
+
+        return JSONResponse({
+            "success": True,
+            "data": {
+                "labels": dates,
+                "values": counts
+            }
+        })
+    except Exception as e:
+        logger.error(f"获取账号增长统计失败: {str(e)}")
+        return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
+
+@admin_router.get("/api/stats/tgapi-calls")
+async def tgapi_call_stats(request: Request, days: int = 7):
+    """TGAPI调用统计API"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return JSONResponse({"success": False, "message": "未认证"}, status_code=401)
+
+    try:
+        from datetime import timedelta
+        # 获取过去N天的TGAPI会话使用统计
+        dates = []
+        login_counts = []
+
+        for i in range(days - 1, -1, -1):
+            date = (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
+            count = db.fetchone(
+                """SELECT SUM(login_count) as total FROM tgapi_sessions
+                   WHERE DATE(created_at) <= ?""",
+                (date,)
+            )
+            dates.append(date)
+            login_counts.append(count['total'] if count and count['total'] else 0)
+
+        return JSONResponse({
+            "success": True,
+            "data": {
+                "labels": dates,
+                "values": login_counts
+            }
+        })
+    except Exception as e:
+        logger.error(f"获取TGAPI调用统计失败: {str(e)}")
+        return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
+
+@admin_router.get("/api/stats/tenant-usage")
+async def tenant_usage_stats(request: Request):
+    """租户使用统计API"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return JSONResponse({"success": False, "message": "未认证"}, status_code=401)
+
+    try:
+        # 获取授权等级分布
+        level_stats = db.fetchall(
+            """SELECT authorization_level, COUNT(*) as count
+               FROM authorized_users
+               WHERE status = 'active'
+               GROUP BY authorization_level"""
+        )
+
+        levels = []
+        counts = []
+        for stat in level_stats:
+            levels.append(stat['authorization_level'].upper())
+            counts.append(stat['count'])
+
+        return JSONResponse({
+            "success": True,
+            "data": {
+                "labels": levels,
+                "values": counts
+            }
+        })
+    except Exception as e:
+        logger.error(f"获取租户使用统计失败: {str(e)}")
+        return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
+
+@admin_router.get("/api/stats/account-status")
+async def account_status_stats(request: Request):
+    """账号状态分布统计API"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return JSONResponse({"success": False, "message": "未认证"}, status_code=401)
+
+    try:
+        # 获取账号状态分布
+        status_stats = db.fetchall(
+            """SELECT status, COUNT(*) as count
+               FROM accounts
+               GROUP BY status"""
+        )
+
+        statuses = []
+        counts = []
+        for stat in status_stats:
+            statuses.append(stat['status'].upper())
+            counts.append(stat['count'])
+
+        return JSONResponse({
+            "success": True,
+            "data": {
+                "labels": statuses,
+                "values": counts
+            }
+        })
+    except Exception as e:
+        logger.error(f"获取账号状态统计失败: {str(e)}")
+        return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
+
+# ==================== 代理管理 ====================
+
+@admin_router.get("/proxies", response_class=HTMLResponse)
+async def proxy_list(request: Request):
+    """代理列表页面"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/admin/login", status_code=status.HTTP_302_FOUND)
+
+    proxies = proxy_pool.proxies
+    return templates.TemplateResponse("admin/proxies.html", {
+        "request": request,
+        "user": user,
+        "proxies": proxies,
+        "count": len(proxies)
+    })
+
+
+@admin_router.post("/proxies/add")
+async def add_proxy(
+    request: Request,
+    proxy_link: str = Form(...),
+    proxy_type: str = Form("mtproto")
+):
+    """添加代理"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return JSONResponse({"success": False, "message": "未认证"}, status_code=401)
+
+    try:
+        if proxy_type == "mtproto":
+            success = proxy_pool.add_mtproxy_link(proxy_link)
+            if success:
+                logger.info(f"✅ 管理员 {user} 添加MTProxy代理")
+                return JSONResponse({"success": True, "message": "代理添加成功"})
+            else:
+                return JSONResponse({"success": False, "message": "代理链接格式错误"})
+
+        elif proxy_type == "socks5":
+            proxy_config = ProxyManager.parse_socks5_string(proxy_link)
+            if proxy_config:
+                proxy_pool.add_proxy(proxy_config)
+                logger.info(f"✅ 管理员 {user} 添加SOCKS5代理")
+                return JSONResponse({"success": True, "message": "代理添加成功"})
+            else:
+                return JSONResponse({"success": False, "message": "代理链接格式错误"})
+
+        else:
+            return JSONResponse({"success": False, "message": "不支持的代理类型"})
+
+    except Exception as e:
+        logger.error(f"添加代理失败: {str(e)}")
+        return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
+
+@admin_router.post("/proxies/remove")
+async def remove_proxy(
+    request: Request,
+    server: str = Form(...),
+    port: int = Form(...)
+):
+    """删除代理"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return JSONResponse({"success": False, "message": "未认证"}, status_code=401)
+
+    try:
+        proxy_pool.remove_proxy(server, port)
+        logger.info(f"✅ 管理员 {user} 删除代理: {server}:{port}")
+        return JSONResponse({"success": True, "message": "代理删除成功"})
+    except Exception as e:
+        logger.error(f"删除代理失败: {str(e)}")
+        return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
+
+@admin_router.post("/proxies/test")
+async def test_proxy(
+    request: Request,
+    server: str = Form(...),
+    port: int = Form(...),
+    secret: str = Form(...)
+):
+    """测试代理"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return JSONResponse({"success": False, "message": "未认证"}, status_code=401)
+
+    try:
+        # TODO: 实现代理测试
+        # 需要API ID和API Hash才能测试
+        return JSONResponse({"success": True, "message": "代理测试功能开发中"})
+    except Exception as e:
+        return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
+
+# ==================== 租户管理 ====================
+
+@admin_router.get("/tenants", response_class=HTMLResponse)
+async def tenant_list(request: Request):
+    """租户列表"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/admin/login", status_code=status.HTTP_302_FOUND)
+
+    # 获取所有租户
+    tenants = db.fetchall("SELECT * FROM tenants ORDER BY created_at DESC")
+
+    return templates.TemplateResponse("admin/tenants.html", {
+        "request": request,
+        "user": user,
+        "tenants": [dict(t) for t in tenants] if tenants else []
+    })
+
+
+@admin_router.post("/tenants/create")
+async def create_tenant(
+    request: Request,
+    tenant_code: str = Form(...),
+    tenant_name: str = Form(...),
+    license_type: str = Form(...),
+    max_accounts: int = Form(10),
+    max_tgapi_sessions: int = Form(5)
+):
+    """创建租户"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return JSONResponse({"success": False, "message": "未认证"}, status_code=401)
+
+    try:
+        # 生成许可证
+        license_key = license_manager.generate_license(
+            tenant_code=tenant_code,
+            tenant_name=tenant_name,
+            license_type=license_type,
+            max_accounts=max_accounts,
+            max_tgapi_sessions=max_tgapi_sessions
+        )
+
+        logger.info(f"✅ 管理员 {user} 创建租户: {tenant_code}")
+        return JSONResponse({
+            "success": True,
+            "message": "租户创建成功",
+            "license_key": license_key
+        })
+    except Exception as e:
+        logger.error(f"创建租户失败: {str(e)}")
+        return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
+
+# ==================== 用户授权管理 ====================
+
+@admin_router.get("/users", response_class=HTMLResponse)
+async def authorized_users_list(request: Request, status_filter: Optional[str] = None):
+    """授权用户列表"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/admin/login", status_code=status.HTTP_302_FOUND)
+
+    # 获取授权用户列表
+    users = auth_manager.get_all_users(status=status_filter)
+
+    # 获取未授权访问日志（最近50条）
+    unauth_logs = db.fetchall(
+        "SELECT * FROM unauthorized_access_logs ORDER BY access_time DESC LIMIT 50"
+    )
+
+    return templates.TemplateResponse("admin/authorized_users.html", {
+        "request": request,
+        "user": user,
+        "users": users,
+        "unauth_logs": [dict(l) for l in unauth_logs] if unauth_logs else [],
+        "status_filter": status_filter
+    })
+
+
+@admin_router.post("/users/authorize")
+async def authorize_user(
+    request: Request,
+    telegram_id: int = Form(...),
+    username: str = Form(None),
+    full_name: str = Form(None),
+    duration_type: str = Form(...),
+    authorization_level: str = Form('basic'),
+    max_accounts: int = Form(10),
+    max_tgapi_sessions: int = Form(5),
+    payment_info: str = Form(None),
+    notes: str = Form(None)
+):
+    """授权用户"""
+    admin_user = AdminAuth.get_current_user(request)
+    if not admin_user:
+        return JSONResponse({"success": False, "message": "未认证"}, status_code=401)
+
+    try:
+        success, message = auth_manager.authorize_user(
+            telegram_id=telegram_id,
+            duration_type=duration_type,
+            username=username,
+            full_name=full_name,
+            authorization_level=authorization_level,
+            max_accounts=max_accounts,
+            max_tgapi_sessions=max_tgapi_sessions,
+            authorized_by=admin_user,
+            payment_info=payment_info,
+            notes=notes
+        )
+
+        if success:
+            logger.info(f"✅ 管理员 {admin_user} 授权用户: {telegram_id}")
+            return JSONResponse({"success": True, "message": message})
+        else:
+            return JSONResponse({"success": False, "message": message})
+
+    except Exception as e:
+        logger.error(f"授权用户失败: {str(e)}")
+        return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
+
+@admin_router.post("/users/{telegram_id}/suspend")
+async def suspend_user(request: Request, telegram_id: int, notes: str = Form(None)):
+    """暂停用户授权"""
+    admin_user = AdminAuth.get_current_user(request)
+    if not admin_user:
+        return JSONResponse({"success": False, "message": "未认证"}, status_code=401)
+
+    try:
+        success, message = auth_manager.suspend_user(
+            telegram_id=telegram_id,
+            operated_by=admin_user,
+            notes=notes
+        )
+
+        if success:
+            logger.info(f"✅ 管理员 {admin_user} 暂停用户: {telegram_id}")
+            return JSONResponse({"success": True, "message": message})
+        else:
+            return JSONResponse({"success": False, "message": message})
+
+    except Exception as e:
+        return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
+
+@admin_router.post("/users/{telegram_id}/activate")
+async def activate_user(request: Request, telegram_id: int, notes: str = Form(None)):
+    """激活用户授权"""
+    admin_user = AdminAuth.get_current_user(request)
+    if not admin_user:
+        return JSONResponse({"success": False, "message": "未认证"}, status_code=401)
+
+    try:
+        success, message = auth_manager.activate_user(
+            telegram_id=telegram_id,
+            operated_by=admin_user,
+            notes=notes
+        )
+
+        if success:
+            logger.info(f"✅ 管理员 {admin_user} 激活用户: {telegram_id}")
+            return JSONResponse({"success": True, "message": message})
+        else:
+            return JSONResponse({"success": False, "message": message})
+
+    except Exception as e:
+        return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
+
+@admin_router.get("/users/{telegram_id}/detail", response_class=HTMLResponse)
+async def tenant_detail(request: Request, telegram_id: int):
+    """租户详情页（显示该租户的所有资源）"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/admin/login", status_code=status.HTTP_302_FOUND)
+
+    # 获取租户基本信息
+    tenant = db.fetchone("SELECT * FROM authorized_users WHERE telegram_id = ?", (telegram_id,))
+    if not tenant:
+        return templates.TemplateResponse("admin/error.html", {
+            "request": request,
+            "user": user,
+            "error_title": "租户不存在",
+            "error_message": f"找不到Telegram ID为 {telegram_id} 的租户"
+        })
+
+    tenant_dict = dict(tenant)
+
+    # 获取租户的所有账号
+    accounts = db.fetchall(
+        """SELECT * FROM accounts
+           WHERE tenant_id = ?
+           ORDER BY created_at DESC""",
+        (tenant_dict['id'],)
+    )
+
+    # 统计账号状态
+    account_stats = {
+        'total': len(accounts),
+        'active': sum(1 for a in accounts if a['status'] == 'active'),
+        'banned': sum(1 for a in accounts if a['status'] == 'banned'),
+        'expired': sum(1 for a in accounts if a['status'] == 'expired')
+    }
+
+    # 获取租户的所有TGAPI会话
+    tgapi_sessions = db.fetchall(
+        """SELECT ts.*, a.phone, a.username
+           FROM tgapi_sessions ts
+           LEFT JOIN accounts a ON ts.account_id = a.id
+           WHERE a.tenant_id = ?
+           ORDER BY ts.created_at DESC""",
+        (tenant_dict['id'],)
+    )
+
+    # 统计TGAPI会话状态
+    session_stats = {
+        'total': len(tgapi_sessions),
+        'active': sum(1 for s in tgapi_sessions if s['status'] == 'active'),
+        'used': sum(1 for s in tgapi_sessions if s['status'] == 'used'),
+        'expired': sum(1 for s in tgapi_sessions if s['status'] == 'expired')
+    }
+
+    # 获取授权日志
+    auth_logs = db.fetchall(
+        """SELECT * FROM authorization_logs
+           WHERE telegram_id = ?
+           ORDER BY created_at DESC
+           LIMIT 20""",
+        (telegram_id,)
+    )
+
+    # 计算配额使用率
+    max_accounts = tenant_dict.get('max_accounts', 10)
+    max_sessions = tenant_dict.get('max_tgapi_sessions', 5)
+
+    usage_stats = {
+        'accounts_usage': f"{account_stats['total']}/{max_accounts}",
+        'accounts_percent': int((account_stats['total'] / max_accounts * 100)) if max_accounts > 0 else 0,
+        'sessions_usage': f"{session_stats['total']}/{max_sessions}",
+        'sessions_percent': int((session_stats['total'] / max_sessions * 100)) if max_sessions > 0 else 0
+    }
+
+    return templates.TemplateResponse("admin/tenant_detail.html", {
+        "request": request,
+        "user": user,
+        "tenant": tenant_dict,
+        "accounts": [dict(a) for a in accounts] if accounts else [],
+        "account_stats": account_stats,
+        "tgapi_sessions": [dict(s) for s in tgapi_sessions] if tgapi_sessions else [],
+        "session_stats": session_stats,
+        "auth_logs": [dict(l) for l in auth_logs] if auth_logs else [],
+        "usage_stats": usage_stats
+    })
+
+
+# ==================== 账号管理 ====================
+
+@admin_router.get("/accounts", response_class=HTMLResponse)
+async def account_list(
+    request: Request,
+    status_filter: Optional[str] = None,
+    tenant_id: Optional[int] = None,
+    search: Optional[str] = None,
+    page: int = 1,
+    per_page: int = 50
+):
+    """账号列表（增强版 - 支持高级搜索）"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/admin/login", status_code=status.HTTP_302_FOUND)
+
+    # 构建查询条件
+    conditions = []
+    params = []
+
+    if status_filter:
+        conditions.append("status = ?")
+        params.append(status_filter)
+
+    if tenant_id:
+        conditions.append("tenant_id = ?")
+        params.append(tenant_id)
+
+    if search:
+        conditions.append("(phone LIKE ? OR username LIKE ?)")
+        params.extend([f"%{search}%", f"%{search}%"])
+
+    # 组装SQL
+    where_clause = " AND ".join(conditions) if conditions else "1=1"
+    offset = (page - 1) * per_page
+
+    # 获取总数
+    count_sql = f"SELECT COUNT(*) as total FROM accounts WHERE {where_clause}"
+    total = db.fetchone(count_sql, tuple(params))["total"] if params else \
+            db.fetchone("SELECT COUNT(*) as total FROM accounts")["total"]
+
+    # 获取账号列表
+    query = f"""
+        SELECT * FROM accounts
+        WHERE {where_clause}
+        ORDER BY created_at DESC
+        LIMIT ? OFFSET ?
+    """
+    params.extend([per_page, offset])
+    accounts = db.fetchall(query, tuple(params)) if params else \
+               db.fetchall(f"SELECT * FROM accounts ORDER BY created_at DESC LIMIT ? OFFSET ?", (per_page, offset))
+
+    # 获取所有租户（用于筛选下拉框） - 使用authorized_users表
+    tenants = db.fetchall("SELECT id, telegram_id, username, full_name FROM authorized_users ORDER BY created_at DESC")
+
+    # 为账号添加租户信息
+    accounts_list = []
+    if accounts:
+        for account in accounts:
+            account_dict = dict(account)
+            # 查找租户信息
+            if account_dict.get('tenant_id'):
+                tenant_info = db.fetchone("SELECT full_name, username FROM authorized_users WHERE id = ?", (account_dict['tenant_id'],))
+                if tenant_info:
+                    account_dict['tenant_full_name'] = tenant_info['full_name'] or tenant_info['username']
+            accounts_list.append(account_dict)
+
+    # 计算总页数
+    total_pages = (total + per_page - 1) // per_page
+
+    return templates.TemplateResponse("admin/accounts.html", {
+        "request": request,
+        "user": user,
+        "accounts": accounts_list,
+        "tenants": [dict(t) for t in tenants] if tenants else [],
+        "status_filter": status_filter,
+        "tenant_id": tenant_id,
+        "search": search,
+        "page": page,
+        "per_page": per_page,
+        "total": total,
+        "total_pages": total_pages
+    })
+
+
+@admin_router.get("/accounts/{account_id}", response_class=HTMLResponse)
+async def account_detail(request: Request, account_id: int):
+    """账号详情页"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/admin/login", status_code=status.HTTP_302_FOUND)
+
+    # 获取账号信息
+    account = db.fetchone("SELECT * FROM accounts WHERE id = ?", (account_id,))
+    if not account:
+        return templates.TemplateResponse("admin/error.html", {
+            "request": request,
+            "user": user,
+            "error": "账号不存在"
+        })
+
+    account_dict = dict(account)
+
+    # 解析JSON数据
+    import json
+    if account_dict.get('session_data'):
+        try:
+            account_dict['session_data_parsed'] = json.loads(account_dict['session_data'])
+        except:
+            account_dict['session_data_parsed'] = {}
+
+    # 获取租户信息（从authorized_users表）
+    tenant = None
+    if account_dict.get('tenant_id'):
+        tenant = db.fetchone("SELECT * FROM authorized_users WHERE id = ?", (account_dict['tenant_id'],))
+
+    # 获取相关的TGAPI会话
+    tgapi_sessions = db.fetchall(
+        "SELECT * FROM tgapi_sessions WHERE account_id = ? ORDER BY created_at DESC",
+        (account_id,)
+    )
+
+    # 获取操作日志（假设logs表存在，如果不存在会返回空列表）
+    logs = []
+    try:
+        logs = db.fetchall(
+            """SELECT timestamp, action, operator, details FROM logs
+               WHERE details LIKE ?
+               ORDER BY timestamp DESC LIMIT 20""",
+            (f"%account:{account_id}%",)
+        )
+    except:
+        # 如果logs表不存在，返回空列表
+        pass
+
+    return templates.TemplateResponse("admin/account_detail.html", {
+        "request": request,
+        "user": user,
+        "account": account_dict,
+        "session_data_parsed": account_dict.get('session_data_parsed'),
+        "tenant": dict(tenant) if tenant else None,
+        "tgapi_sessions": [dict(s) for s in tgapi_sessions] if tgapi_sessions else [],
+        "logs": [dict(l) for l in logs] if logs else []
+    })
+
+
+@admin_router.post("/accounts/bulk-delete")
+async def bulk_delete_accounts(request: Request, account_ids: str = Form(...)):
+    """批量删除账号"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return JSONResponse({"success": False, "message": "未认证"}, status_code=401)
+
+    try:
+        ids = [int(id.strip()) for id in account_ids.split(",") if id.strip()]
+
+        for account_id in ids:
+            db.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
+
+        logger.info(f"✅ 管理员 {user} 批量删除账号: {len(ids)}个")
+        return JSONResponse({"success": True, "message": f"成功删除 {len(ids)} 个账号"})
+
+    except Exception as e:
+        logger.error(f"批量删除账号失败: {str(e)}")
+        return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
+
+@admin_router.get("/accounts/export")
+async def export_accounts(
+    request: Request,
+    status_filter: Optional[str] = None,
+    tenant_id: Optional[int] = None
+):
+    """导出账号（CSV格式）"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/admin/login", status_code=status.HTTP_302_FOUND)
+
+    try:
+        # 构建查询条件
+        conditions = []
+        params = []
+
+        if status_filter:
+            conditions.append("status = ?")
+            params.append(status_filter)
+
+        if tenant_id:
+            conditions.append("tenant_id = ?")
+            params.append(tenant_id)
+
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+        # 获取账号数据
+        query = f"SELECT * FROM accounts WHERE {where_clause} ORDER BY created_at DESC"
+        accounts = db.fetchall(query, tuple(params)) if params else db.fetchall(query)
+
+        # 生成CSV
+        import csv
+        import io
+        from fastapi.responses import StreamingResponse
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+
+        # 写入表头
+        writer.writerow(['ID', '手机号', '用户名', 'Session类型', '状态', '创建时间', '最后检查'])
+
+        # 写入数据
+        for account in accounts:
+            writer.writerow([
+                account['id'],
+                account['phone'],
+                account.get('username', ''),
+                account['session_type'],
+                account['status'],
+                account['created_at'],
+                account.get('last_check', '')
+            ])
+
+        output.seek(0)
+        logger.info(f"✅ 管理员 {user} 导出账号: {len(accounts)}个")
+
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=accounts_export.csv"}
+        )
+
+    except Exception as e:
+        logger.error(f"导出账号失败: {str(e)}")
+        return templates.TemplateResponse("admin/error.html", {
+            "request": request,
+            "user": user,
+            "error": f"导出失败: {str(e)}"
+        })
+
+
+@admin_router.get("/export/excel")
+async def export_all_data_excel(request: Request):
+    """导出完整数据报表（Excel格式）"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/admin/login", status_code=status.HTTP_302_FOUND)
+
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment
+        import io
+        from fastapi.responses import StreamingResponse
+
+        # 创建Excel工作簿
+        wb = Workbook()
+
+        # === 工作表1: 账号统计 ===
+        ws1 = wb.active
+        ws1.title = "账号统计"
+
+        # 设置表头样式
+        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+        header_font = Font(color="FFFFFF", bold=True)
+
+        # 表头
+        headers = ['ID', '手机号', '用户名', 'Session类型', '状态', '租户ID', '创建时间', '最后检查']
+        for col_num, header in enumerate(headers, 1):
+            cell = ws1.cell(row=1, column=col_num)
+            cell.value = header
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal='center')
+
+        # 获取所有账号
+        accounts = db.fetchall("SELECT * FROM accounts ORDER BY created_at DESC")
+        for row_num, account in enumerate(accounts, 2):
+            ws1.cell(row=row_num, column=1).value = account['id']
+            ws1.cell(row=row_num, column=2).value = account['phone']
+            ws1.cell(row=row_num, column=3).value = account.get('username', '')
+            ws1.cell(row=row_num, column=4).value = account['session_type']
+            ws1.cell(row=row_num, column=5).value = account['status']
+            ws1.cell(row=row_num, column=6).value = account.get('tenant_id', '')
+            ws1.cell(row=row_num, column=7).value = account['created_at']
+            ws1.cell(row=row_num, column=8).value = account.get('last_check', '')
+
+        # 自动调整列宽
+        for column in ws1.columns:
+            max_length = 0
+            column_letter = column[0].column_letter
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 50)
+            ws1.column_dimensions[column_letter].width = adjusted_width
+
+        # === 工作表2: 授权用户统计 ===
+        ws2 = wb.create_sheet(title="授权用户")
+
+        # 表头
+        headers = ['TG用户ID', '用户名', '全名', '授权等级', '时长类型', '状态', '过期时间', '授权时间']
+        for col_num, header in enumerate(headers, 1):
+            cell = ws2.cell(row=1, column=col_num)
+            cell.value = header
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal='center')
+
+        # 获取所有授权用户
+        auth_users = db.fetchall("SELECT * FROM authorized_users ORDER BY created_at DESC")
+        for row_num, user_data in enumerate(auth_users, 2):
+            ws2.cell(row=row_num, column=1).value = user_data['telegram_id']
+            ws2.cell(row=row_num, column=2).value = user_data.get('username', '')
+            ws2.cell(row=row_num, column=3).value = user_data.get('full_name', '')
+            ws2.cell(row=row_num, column=4).value = user_data['authorization_level']
+            ws2.cell(row=row_num, column=5).value = user_data.get('duration_type', '')
+            ws2.cell(row=row_num, column=6).value = user_data['status']
+            ws2.cell(row=row_num, column=7).value = user_data.get('expire_date', '')
+            ws2.cell(row=row_num, column=8).value = user_data['authorization_date']
+
+        # 自动调整列宽
+        for column in ws2.columns:
+            max_length = 0
+            column_letter = column[0].column_letter
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 50)
+            ws2.column_dimensions[column_letter].width = adjusted_width
+
+        # === 工作表3: TGAPI会话统计 ===
+        ws3 = wb.create_sheet(title="TGAPI会话")
+
+        # 表头
+        headers = ['Token', '账号ID', '状态', '登录次数', '最大登录', '过期时间', '创建时间']
+        for col_num, header in enumerate(headers, 1):
+            cell = ws3.cell(row=1, column=col_num)
+            cell.value = header
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal='center')
+
+        # 获取所有TGAPI会话
+        sessions = db.fetchall("SELECT * FROM tgapi_sessions ORDER BY created_at DESC LIMIT 1000")
+        for row_num, session in enumerate(sessions, 2):
+            ws3.cell(row=row_num, column=1).value = session['token'][:20] + '...'
+            ws3.cell(row=row_num, column=2).value = session.get('account_id', '')
+            ws3.cell(row=row_num, column=3).value = session['status']
+            ws3.cell(row=row_num, column=4).value = session['login_count']
+            ws3.cell(row=row_num, column=5).value = session['max_login']
+            ws3.cell(row=row_num, column=6).value = session.get('expire_time', '')
+            ws3.cell(row=row_num, column=7).value = session['created_at']
+
+        # 自动调整列宽
+        for column in ws3.columns:
+            max_length = 0
+            column_letter = column[0].column_letter
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 50)
+            ws3.column_dimensions[column_letter].width = adjusted_width
+
+        # 保存到内存
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        filename = f"TG_Bot_Manager_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        logger.info(f"✅ 管理员 {user} 导出Excel报表")
+
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+
+    except Exception as e:
+        logger.error(f"导出Excel失败: {str(e)}")
+        return templates.TemplateResponse("admin/error.html", {
+            "request": request,
+            "user": user,
+            "error_title": "导出失败",
+            "error_message": f"无法生成Excel报表: {str(e)}"
+        })
+
+
+# ==================== TGAPI会话管理 ====================
+
+@admin_router.get("/tgapi-sessions", response_class=HTMLResponse)
+async def tgapi_sessions(request: Request):
+    """TGAPI会话列表"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/admin/login", status_code=status.HTTP_302_FOUND)
+
+    # 获取TGAPI会话
+    sessions = db.fetchall(
+        "SELECT * FROM tgapi_sessions ORDER BY created_at DESC LIMIT 100"
+    )
+
+    return templates.TemplateResponse("admin/tgapi_sessions.html", {
+        "request": request,
+        "user": user,
+        "sessions": [dict(s) for s in sessions] if sessions else []
+    })
+
+
+@admin_router.post("/tgapi-sessions/{session_id}/disable")
+async def disable_tgapi_session(request: Request, session_id: int):
+    """禁用TGAPI会话"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return JSONResponse({"success": False, "message": "未认证"}, status_code=401)
+
+    try:
+        db.execute(
+            "UPDATE tgapi_sessions SET status = 'disabled' WHERE id = ?",
+            (session_id,)
+        )
+        logger.info(f"✅ 管理员 {user} 禁用TGAPI会话: {session_id}")
+        return JSONResponse({"success": True, "message": "会话已禁用"})
+    except Exception as e:
+        return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
+
+# ==================== 许可证管理 ====================
+
+@admin_router.get("/licenses", response_class=HTMLResponse)
+async def license_list(request: Request):
+    """许可证列表"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/admin/login", status_code=status.HTTP_302_FOUND)
+
+    # 获取所有租户（含许可证信息）
+    tenants = db.fetchall("SELECT * FROM tenants ORDER BY created_at DESC")
+
+    return templates.TemplateResponse("admin/licenses.html", {
+        "request": request,
+        "user": user,
+        "licenses": [dict(t) for t in tenants] if tenants else []
+    })
+
+
+# ==================== 系统日志 ====================
+
+@admin_router.get("/logs", response_class=HTMLResponse)
+async def system_logs(request: Request, log_type: str = "operation"):
+    """系统日志"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/admin/login", status_code=status.HTTP_302_FOUND)
+
+    # 获取日志
+    if log_type == "operation":
+        logs = db.fetchall(
+            "SELECT * FROM operation_logs ORDER BY created_at DESC LIMIT 200"
+        )
+    else:
+        logs = []
+
+    return templates.TemplateResponse("admin/logs.html", {
+        "request": request,
+        "user": user,
+        "logs": [dict(l) for l in logs] if logs else [],
+        "log_type": log_type
+    })
+
+
+# ==================== 系统设置 ====================
+
+@admin_router.get("/settings", response_class=HTMLResponse)
+async def system_settings(request: Request):
+    """系统设置"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/admin/login", status_code=status.HTTP_302_FOUND)
+
+    from shared.config.settings import settings
+
+    return templates.TemplateResponse("admin/settings.html", {
+        "request": request,
+        "user": user,
+        "settings": {
+            "database_type": settings.database.type,
+            "server_host": settings.server.host,
+            "server_port": settings.server.port,
+            "tgapi_base_url": settings.tgapi.base_url
+        }
+    })
+
+
+# ==================== Bot Pool 管理 ====================
+
+@admin_router.get("/bot-pool", response_class=HTMLResponse)
+async def bot_pool_management(request: Request):
+    """Bot Pool管理页面"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/admin/login", status_code=status.HTTP_302_FOUND)
+
+    try:
+        # 获取所有Bot配置
+        bots = db.fetchall("SELECT * FROM bot_configs ORDER BY priority DESC, id ASC")
+
+        # 获取每个Bot的实时统计
+        bot_list = []
+        for bot in bots:
+            stats = db.fetchone("SELECT * FROM bot_stats WHERE bot_id = ?", (bot['id'],))
+            bot_dict = dict(bot)
+            bot_dict['stats'] = dict(stats) if stats else None
+            bot_list.append(bot_dict)
+
+        # 获取总体统计
+        total_active_users = db.fetchone(
+            "SELECT SUM(active_users) as total FROM bot_stats"
+        )['total'] or 0
+
+        total_capacity = db.fetchone(
+            "SELECT SUM(max_load) as total FROM bot_configs WHERE status = 'active'"
+        )['total'] or 0
+
+        # 获取最近事件
+        recent_events = db.fetchall(
+            """SELECT be.*, bc.bot_username
+               FROM bot_events be
+               LEFT JOIN bot_configs bc ON be.bot_id = bc.id
+               ORDER BY be.created_at DESC
+               LIMIT 50"""
+        )
+
+        return templates.TemplateResponse("admin/bot_pool.html", {
+            "request": request,
+            "user": user,
+            "bots": bot_list,
+            "total_bots": len(bots),
+            "active_bots": sum(1 for b in bots if b['status'] == 'active'),
+            "total_active_users": total_active_users,
+            "total_capacity": total_capacity,
+            "utilization_rate": round((total_active_users / total_capacity * 100), 2) if total_capacity > 0 else 0,
+            "recent_events": [dict(e) for e in recent_events] if recent_events else []
+        })
+
+    except Exception as e:
+        logger.error(f"获取Bot Pool信息失败: {e}")
+        return templates.TemplateResponse("admin/error.html", {
+            "request": request,
+            "user": user,
+            "error_title": "加载失败",
+            "error_message": str(e)
+        })
+
+
+@admin_router.post("/bot-pool/add")
+async def add_bot_to_pool(
+    request: Request,
+    bot_token: str = Form(...),
+    bot_username: str = Form(...),
+    bot_name: str = Form(...),
+    max_load: int = Form(100),
+    priority: int = Form(1),
+    description: str = Form(None)
+):
+    """添加Bot到池中"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return JSONResponse({"success": False, "message": "未认证"}, status_code=401)
+
+    try:
+        # 插入Bot配置
+        db.execute(
+            """INSERT INTO bot_configs
+               (bot_token, bot_username, bot_name, max_load, priority, description, status)
+               VALUES (?, ?, ?, ?, ?, ?, 'active')""",
+            (bot_token, bot_username, bot_name, max_load, priority, description)
+        )
+
+        bot_id = db.fetchone("SELECT LAST_INSERT_ID() as id")['id']
+
+        logger.info(f"✅ 管理员 {user} 添加Bot: {bot_username} (ID: {bot_id})")
+
+        return JSONResponse({
+            "success": True,
+            "message": f"Bot {bot_username} 添加成功！",
+            "bot_id": bot_id
+        })
+
+    except Exception as e:
+        logger.error(f"添加Bot失败: {e}")
+        return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
+
+@admin_router.post("/bot-pool/{bot_id}/toggle-status")
+async def toggle_bot_status(request: Request, bot_id: int):
+    """切换Bot状态（active/inactive）"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return JSONResponse({"success": False, "message": "未认证"}, status_code=401)
+
+    try:
+        # 获取当前状态
+        bot = db.fetchone("SELECT status FROM bot_configs WHERE id = ?", (bot_id,))
+        if not bot:
+            return JSONResponse({"success": False, "message": "Bot不存在"}, status_code=404)
+
+        # 切换状态
+        new_status = 'inactive' if bot['status'] == 'active' else 'active'
+
+        db.execute(
+            "UPDATE bot_configs SET status = ?, updated_at = ? WHERE id = ?",
+            (new_status, datetime.now(), bot_id)
+        )
+
+        # 记录事件
+        db.execute(
+            """INSERT INTO bot_events (bot_id, event_type, event_level, message)
+               VALUES (?, ?, ?, ?)""",
+            (bot_id, 'status_change', 'info', f'管理员 {user} 将状态改为 {new_status}')
+        )
+
+        logger.info(f"✅ 管理员 {user} 切换Bot状态: bot_id={bot_id} -> {new_status}")
+
+        return JSONResponse({
+            "success": True,
+            "message": f"Bot状态已切换为: {new_status}",
+            "new_status": new_status
+        })
+
+    except Exception as e:
+        logger.error(f"切换Bot状态失败: {e}")
+        return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
+
+@admin_router.post("/bot-pool/{bot_id}/delete")
+async def delete_bot_from_pool(request: Request, bot_id: int):
+    """从池中删除Bot"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return JSONResponse({"success": False, "message": "未认证"}, status_code=401)
+
+    try:
+        # 检查Bot是否存在
+        bot = db.fetchone("SELECT bot_username FROM bot_configs WHERE id = ?", (bot_id,))
+        if not bot:
+            return JSONResponse({"success": False, "message": "Bot不存在"}, status_code=404)
+
+        # 删除Bot（级联删除相关stats和events）
+        db.execute("DELETE FROM bot_configs WHERE id = ?", (bot_id,))
+
+        logger.info(f"✅ 管理员 {user} 删除Bot: {bot['bot_username']} (ID: {bot_id})")
+
+        return JSONResponse({
+            "success": True,
+            "message": f"Bot {bot['bot_username']} 已删除"
+        })
+
+    except Exception as e:
+        logger.error(f"删除Bot失败: {e}")
+        return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
+
+@admin_router.get("/bot-pool/stats")
+async def get_bot_pool_stats(request: Request):
+    """获取Bot Pool实时统计（API）"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return JSONResponse({"success": False, "message": "未认证"}, status_code=401)
+
+    try:
+        # 获取所有Bot及其统计
+        bots = db.fetchall(
+            """SELECT bc.*, bs.*
+               FROM bot_configs bc
+               LEFT JOIN bot_stats bs ON bc.id = bs.bot_id
+               ORDER BY bc.priority DESC"""
+        )
+
+        bot_stats = []
+        for bot in bots:
+            bot_stats.append({
+                'bot_id': bot['id'],
+                'bot_username': bot['bot_username'],
+                'status': bot['status'],
+                'active_users': bot.get('active_users', 0),
+                'total_messages': bot.get('total_messages', 0),
+                'load_percentage': round((bot.get('active_users', 0) / bot['max_load'] * 100), 2) if bot['max_load'] > 0 else 0,
+                'last_heartbeat': bot.get('last_heartbeat')
+            })
+
+        return JSONResponse({
+            "success": True,
+            "data": bot_stats
+        })
+
+    except Exception as e:
+        logger.error(f"获取Bot Pool统计失败: {e}")
+        return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
+
+# ==================== API接口（JSON） ====================
+
+@admin_router.get("/api/stats")
+async def get_admin_stats(request: Request):
+    """获取统计数据（API）"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return JSONResponse({"success": False, "message": "未认证"}, status_code=401)
+
+    try:
+        stats = db.get_stats()
+        return JSONResponse({"success": True, "stats": stats})
+    except Exception as e:
+        return JSONResponse({"success": False, "message": str(e)}, status_code=500)

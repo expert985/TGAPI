@@ -1,0 +1,74 @@
+{% extends "admin/base.html" %}
+
+{% block title %}许可证管理{% endblock %}
+{% block page_title %}许可证管理{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">
+        <i class="bi bi-shield-check"></i> 许可证管理
+    </h1>
+    <p class="text-muted">查看和管理系统许可证</p>
+</div>
+
+<div class="card border-0 shadow-sm">
+    <div class="card-header bg-white">
+        <h5 class="mb-0"><i class="bi bi-list-ul"></i> 许可证列表</h5>
+    </div>
+    <div class="card-body p-0">
+        {% if licenses %}
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>租户代码</th>
+                        <th>租户名称</th>
+                        <th>许可证密钥</th>
+                        <th>许可证类型</th>
+                        <th>过期时间</th>
+                        <th>状态</th>
+                        <th>创建时间</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for license in licenses %}
+                    <tr>
+                        <td><code>{{ license.tenant_code }}</code></td>
+                        <td>{{ license.tenant_name }}</td>
+                        <td><code>{{ license.license_key }}</code></td>
+                        <td>
+                            {% if license.license_type == 'lifetime' %}
+                                <span class="badge bg-success">永久版</span>
+                            {% elif license.license_type == 'yearly' %}
+                                <span class="badge bg-primary">年付版</span>
+                            {% elif license.license_type == 'monthly' %}
+                                <span class="badge bg-info">月付版</span>
+                            {% elif license.license_type == 'trial' %}
+                                <span class="badge bg-warning">试用版</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ license.expire_at or '永不过期' }}</td>
+                        <td>
+                            {% if license.status == 'active' %}
+                                <span class="status-badge bg-success">激活</span>
+                            {% elif license.status == 'suspended' %}
+                                <span class="status-badge bg-warning">暂停</span>
+                            {% elif license.status == 'expired' %}
+                                <span class="status-badge bg-danger">过期</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ license.created_at }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="text-center py-5">
+            <i class="bi bi-inbox" style="font-size: 4rem; color: #ccc;"></i>
+            <p class="text-muted mt-3">暂无许可证</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

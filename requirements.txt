@@ -5,6 +5,8 @@ pyrogram>=2.0.0
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
 pydantic>=2.0.0
+jinja2>=3.1.0  # 模板引擎（管理后台）
+python-multipart>=0.0.6  # 表单处理（管理后台）
 
 # Database - SQLite (默认，开发环境)
 # sqlite3  # Built-in with Python
@@ -35,6 +37,7 @@ colorlog>=6.7.0
 # Additional utilities
 qrcode>=7.4.2  # 二维码生成（扫码登录）
 pillow>=10.0.0  # 图像处理
+openpyxl>=3.1.0  # Excel文件导出（管理后台）
 
 # 定时任务
 apscheduler>=3.10.0

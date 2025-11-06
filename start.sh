@@ -400,6 +400,187 @@ db_manage() {
     deactivate
 }
 
+# PM2管理
+pm2_start() {
+    show_banner
+    log_info "使用PM2启动服务..."
+
+    check_env_file
+    check_python_venv
+
+    # 检查PM2是否安装
+    if ! command -v pm2 &> /dev/null; then
+        log_error "PM2未安装，请先安装: npm install -g pm2"
+        exit 1
+    fi
+
+    # 启动服务
+    pm2 start ecosystem.config.js
+
+    log_success "服务启动成功！"
+    echo
+    log_info "查看状态: pm2 status 或 ./start.sh pm2 status"
+    log_info "查看日志: pm2 logs 或 ./start.sh pm2 logs"
+}
+
+pm2_stop() {
+    show_banner
+    log_info "停止PM2服务..."
+    pm2 stop ecosystem.config.js
+    log_success "服务已停止"
+}
+
+pm2_restart() {
+    show_banner
+    log_info "重启PM2服务..."
+    pm2 restart ecosystem.config.js
+    log_success "服务重启成功"
+}
+
+pm2_status() {
+    show_banner
+    log_info "PM2服务状态:"
+    echo
+    pm2 status
+}
+
+pm2_logs() {
+    show_banner
+    log_info "实时查看PM2日志 (Ctrl+C退出)..."
+    echo
+    if [ -n "$1" ]; then
+        pm2 logs $1
+    else
+        pm2 logs
+    fi
+}
+
+pm2_delete() {
+    show_banner
+    log_warning "删除PM2服务..."
+    read -p "确定要删除所有PM2服务? (y/n): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        pm2 delete ecosystem.config.js
+        log_success "PM2服务已删除"
+    fi
+}
+
+# Bot Pool管理
+pool_status() {
+    show_banner
+    log_info "查询Bot Pool状态..."
+
+    source $VENV_DIR/bin/activate
+
+    # 使用Python查询Bot Pool状态
+    python -c "
+from shared.database.init import db
+from bot.pool.redis_cache import BotPoolRedisCache
+import redis
+import os
+
+db.initialize()
+
+# 查询数据库中的bot配置
+bots = db.fetchall('SELECT * FROM bot_configs ORDER BY priority DESC')
+
+print('\\n📊 Bot Pool状态:\\n')
+print(f'总Bot数: {len(bots)}')
+
+for bot in bots:
+    status_icon = '✅' if bot['status'] == 'active' else '⚠️'
+    print(f'{status_icon} Bot #{bot[\"id\"]} (@{bot[\"bot_username\"]}) - {bot[\"status\"]} - 优先级:{bot[\"priority\"]}')
+
+# 查询Redis缓存
+try:
+    redis_client = redis.Redis(
+        host=os.getenv('REDIS_HOST', 'localhost'),
+        port=int(os.getenv('REDIS_PORT', 6379)),
+        db=int(os.getenv('REDIS_DB', 0)),
+        decode_responses=True
+    )
+    cache = BotPoolRedisCache(redis_client)
+
+    # 获取可用bot列表
+    available_bots = redis_client.zrange('bot_pool:available_bots', 0, -1, withscores=True)
+    if available_bots:
+        print('\\n📈 当前负载:')
+        for bot_id, load in available_bots:
+            print(f'  Bot #{bot_id}: {int(load)} 活跃用户')
+except Exception as e:
+    print(f'\\n⚠️  Redis连接失败: {str(e)}')
+"
+
+    deactivate
+}
+
+pool_add() {
+    show_banner
+    log_info "添加Bot到Pool..."
+
+    read -p "Bot Token: " bot_token
+    read -p "Bot Username (如@MyBot): " bot_username
+    read -p "Bot名称: " bot_name
+    read -p "最大负载 (默认100): " max_load
+    read -p "优先级 (1-10, 默认5): " priority
+
+    max_load=${max_load:-100}
+    priority=${priority:-5}
+
+    source $VENV_DIR/bin/activate
+
+    python -c "
+from shared.database.init import db
+
+db.initialize()
+
+db.execute('''
+    INSERT INTO bot_configs (bot_token, bot_username, bot_name, max_load, priority, status)
+    VALUES (?, ?, ?, ?, ?, 'inactive')
+''', ('$bot_token', '$bot_username', '$bot_name', $max_load, $priority))
+
+print('✅ Bot已添加到池中')
+print('⚠️  请重启Bot Pool服务以加载新bot')
+"
+
+    deactivate
+}
+
+pool_restart_bot() {
+    show_banner
+
+    if [ -z "$1" ]; then
+        log_error "请指定Bot ID"
+        echo "用法: ./start.sh pool restart <bot_id>"
+        exit 1
+    fi
+
+    log_info "重启Bot #$1..."
+
+    source $VENV_DIR/bin/activate
+
+    python -c "
+from shared.database.init import db
+
+db.initialize()
+
+# 设置bot为maintenance状态
+db.execute('UPDATE bot_configs SET status = \"maintenance\" WHERE id = ?', ($1,))
+print('⏸️  Bot #$1 已设为维护模式')
+
+# 等待3秒
+import time
+time.sleep(3)
+
+# 恢复为active状态
+db.execute('UPDATE bot_configs SET status = \"active\" WHERE id = ?', ($1,))
+print('✅ Bot #$1 已恢复运行')
+"
+
+    deactivate
+}
+
 # 清理
 clean() {
     show_banner
@@ -423,28 +604,219 @@ clean() {
 # 显示帮助
 show_help() {
     show_banner
-    echo -e "${GREEN}使用方法:${NC}"
-    echo "  $0 <命令> [选项]"
+    echo -e "${GREEN}═══════════════════════════════════════════════════════${NC}"
+    echo -e "${YELLOW}📖 使用方法${NC}"
+    echo -e "${GREEN}═══════════════════════════════════════════════════════${NC}"
     echo
-    echo -e "${GREEN}可用命令:${NC}"
-    echo -e "  ${BLUE}init${NC}          - 一键环境检测和初始化"
-    echo -e "  ${BLUE}start${NC}         - 启动Docker容器"
-    echo -e "  ${BLUE}stop${NC}          - 停止Docker容器"
-    echo -e "  ${BLUE}restart${NC}       - 重启Docker容器"
-    echo -e "  ${BLUE}status${NC}        - 查看容器状态"
-    echo -e "  ${BLUE}logs${NC} [服务]   - 查看日志（可选指定服务: api/bot）"
-    echo -e "  ${BLUE}test${NC}          - 测试模式运行（不使用Docker）"
-    echo -e "  ${BLUE}db${NC} <操作>     - 数据库管理 (init/backup/stats)"
-    echo -e "  ${BLUE}clean${NC}         - 清理容器和数据"
-    echo -e "  ${BLUE}help${NC}          - 显示此帮助信息"
+    echo -e "${BLUE}🎯 交互式菜单模式（推荐）:${NC}"
+    echo -e "  ${GREEN}$0${NC}                     # 直接运行，进入交互式菜单"
+    echo -e "  ${GREEN}$0 menu${NC}                # 显式进入交互式菜单"
     echo
-    echo -e "${GREEN}示例:${NC}"
-    echo "  $0 init           # 首次使用，初始化环境"
-    echo "  $0 start          # 启动服务"
-    echo "  $0 logs api       # 查看API服务日志"
-    echo "  $0 test           # 测试模式运行"
-    echo "  $0 db backup      # 备份数据库"
+    echo -e "${BLUE}⌨️  命令行模式:${NC}"
+    echo -e "  ${GREEN}$0 <命令> [选项]${NC}       # 传统命令行方式"
     echo
+    echo -e "${GREEN}─────────────────────────────────────────────────────${NC}"
+    echo -e "${YELLOW}📋 可用命令${NC}"
+    echo -e "${GREEN}─────────────────────────────────────────────────────${NC}"
+    echo
+    echo -e "${BLUE}【Docker模式】${NC}"
+    echo -e "  ${BLUE}init${NC}           - 一键环境检测和初始化"
+    echo -e "  ${BLUE}start${NC}          - 启动Docker容器"
+    echo -e "  ${BLUE}stop${NC}           - 停止Docker容器"
+    echo -e "  ${BLUE}restart${NC}        - 重启Docker容器"
+    echo -e "  ${BLUE}status${NC}         - 查看容器状态"
+    echo -e "  ${BLUE}logs${NC} [服务]    - 查看日志（可选指定服务: api/bot）"
+    echo
+    echo -e "${BLUE}【PM2模式】${NC}"
+    echo -e "  ${BLUE}pm2${NC} start      - 使用PM2启动服务"
+    echo -e "  ${BLUE}pm2${NC} stop       - 停止PM2服务"
+    echo -e "  ${BLUE}pm2${NC} restart    - 重启PM2服务"
+    echo -e "  ${BLUE}pm2${NC} status     - 查看PM2状态"
+    echo -e "  ${BLUE}pm2${NC} logs       - 查看PM2日志"
+    echo -e "  ${BLUE}pm2${NC} delete     - 删除PM2服务"
+    echo
+    echo -e "${BLUE}【Bot Pool管理】${NC}"
+    echo -e "  ${BLUE}pool${NC} status    - 查看Bot Pool状态"
+    echo -e "  ${BLUE}pool${NC} add       - 添加Bot到池中"
+    echo -e "  ${BLUE}pool${NC} restart <id> - 重启指定Bot"
+    echo
+    echo -e "${BLUE}【其他功能】${NC}"
+    echo -e "  ${BLUE}test${NC}           - 测试模式运行（不使用Docker）"
+    echo -e "  ${BLUE}db${NC} <操作>      - 数据库管理 (init/backup/stats)"
+    echo -e "  ${BLUE}clean${NC}          - 清理容器和数据"
+    echo -e "  ${BLUE}help${NC}           - 显示此帮助信息"
+    echo
+    echo -e "${GREEN}─────────────────────────────────────────────────────${NC}"
+    echo -e "${YELLOW}💡 使用示例${NC}"
+    echo -e "${GREEN}─────────────────────────────────────────────────────${NC}"
+    echo
+    echo -e "${BLUE}交互式模式（推荐新手）:${NC}"
+    echo "  $0                     # 进入菜单，选择数字执行操作"
+    echo
+    echo -e "${BLUE}命令行模式（推荐脚本）:${NC}"
+    echo "  $0 init                # 首次使用，初始化环境"
+    echo "  $0 start               # 启动Docker服务"
+    echo "  $0 pm2 start           # 使用PM2启动"
+    echo "  $0 pool status         # 查看Bot Pool状态"
+    echo "  $0 pool add            # 添加新Bot"
+    echo "  $0 pool restart 1      # 重启Bot #1"
+    echo "  $0 logs api            # 查看API服务日志"
+    echo "  $0 test                # 测试模式运行"
+    echo "  $0 db backup           # 备份数据库"
+    echo
+    echo -e "${GREEN}═══════════════════════════════════════════════════════${NC}"
+}
+
+# ============================================================
+# 交互式菜单
+# ============================================================
+
+show_menu() {
+    clear
+    show_banner
+    echo -e "${GREEN}╔════════════════════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}║            请选择要执行的操作                       ║${NC}"
+    echo -e "${GREEN}╚════════════════════════════════════════════════════╝${NC}"
+    echo
+    echo -e "${BLUE}【Docker模式】${NC}"
+    echo -e "  ${YELLOW}1${NC})  🔧 环境初始化检测 (init)"
+    echo -e "  ${YELLOW}2${NC})  ▶️  启动Docker容器 (start)"
+    echo -e "  ${YELLOW}3${NC})  ⏸️  停止Docker容器 (stop)"
+    echo -e "  ${YELLOW}4${NC})  🔄 重启Docker容器 (restart)"
+    echo -e "  ${YELLOW}5${NC})  📊 查看容器状态 (status)"
+    echo -e "  ${YELLOW}6${NC})  📝 查看容器日志 (logs)"
+    echo
+    echo -e "${BLUE}【PM2模式】${NC}"
+    echo -e "  ${YELLOW}11${NC}) ▶️  使用PM2启动服务"
+    echo -e "  ${YELLOW}12${NC}) ⏸️  停止PM2服务"
+    echo -e "  ${YELLOW}13${NC}) 🔄 重启PM2服务"
+    echo -e "  ${YELLOW}14${NC}) 📊 查看PM2状态"
+    echo -e "  ${YELLOW}15${NC}) 📝 查看PM2日志"
+    echo -e "  ${YELLOW}16${NC}) 🗑️  删除PM2服务"
+    echo
+    echo -e "${BLUE}【Bot Pool管理】${NC}"
+    echo -e "  ${YELLOW}21${NC}) 📊 查看Bot Pool状态"
+    echo -e "  ${YELLOW}22${NC}) ➕ 添加Bot到池中"
+    echo -e "  ${YELLOW}23${NC}) 🔄 重启指定Bot"
+    echo
+    echo -e "${BLUE}【其他功能】${NC}"
+    echo -e "  ${YELLOW}31${NC}) 🧪 测试模式运行 (test)"
+    echo -e "  ${YELLOW}32${NC}) 💾 数据库管理 (db)"
+    echo -e "  ${YELLOW}33${NC}) 🧹 清理容器和数据 (clean)"
+    echo
+    echo -e "${BLUE}【系统】${NC}"
+    echo -e "  ${YELLOW}98${NC}) ❓ 显示帮助信息"
+    echo -e "  ${YELLOW}99${NC}) 🚪 退出程序"
+    echo
+    echo -e "${GREEN}════════════════════════════════════════════════════${NC}"
+}
+
+interactive_mode() {
+    while true; do
+        show_menu
+        read -p "$(echo -e ${GREEN}请输入选项编号: ${NC})" choice
+        echo
+
+        case $choice in
+            # Docker模式
+            1)
+                init_check
+                ;;
+            2)
+                docker_start
+                ;;
+            3)
+                docker_stop
+                ;;
+            4)
+                docker_restart
+                ;;
+            5)
+                docker_status
+                ;;
+            6)
+                read -p "查看哪个服务的日志? (api/bot/all，默认all): " service
+                docker_logs ${service:-all}
+                ;;
+
+            # PM2模式
+            11)
+                pm2_start
+                ;;
+            12)
+                pm2_stop
+                ;;
+            13)
+                pm2_restart
+                ;;
+            14)
+                pm2_status
+                ;;
+            15)
+                read -p "查看哪个服务的日志? (tgapi-bot/tgapi-api/all，默认all): " service
+                pm2_logs $service
+                ;;
+            16)
+                pm2_delete
+                ;;
+
+            # Bot Pool管理
+            21)
+                pool_status
+                ;;
+            22)
+                pool_add
+                ;;
+            23)
+                read -p "请输入Bot ID: " bot_id
+                if [ -n "$bot_id" ]; then
+                    pool_restart_bot $bot_id
+                else
+                    log_error "Bot ID不能为空"
+                fi
+                ;;
+
+            # 其他功能
+            31)
+                test_mode
+                ;;
+            32)
+                echo -e "${BLUE}数据库管理子菜单:${NC}"
+                echo "  1) 初始化数据库 (init)"
+                echo "  2) 备份数据库 (backup)"
+                echo "  3) 查看统计信息 (stats)"
+                read -p "请选择: " db_choice
+                case $db_choice in
+                    1) db_manage init ;;
+                    2) db_manage backup ;;
+                    3) db_manage stats ;;
+                    *) log_error "无效的选项" ;;
+                esac
+                ;;
+            33)
+                clean
+                ;;
+
+            # 系统
+            98)
+                show_help
+                ;;
+            99)
+                echo -e "${GREEN}感谢使用！再见 👋${NC}"
+                exit 0
+                ;;
+
+            *)
+                log_error "无效的选项: $choice"
+                ;;
+        esac
+
+        # 操作完成后暂停
+        if [ "$choice" != "99" ]; then
+            echo
+            read -p "$(echo -e ${YELLOW}按Enter键继续...${NC})"
+        fi
+    done
 }
 
 # ============================================================
@@ -452,7 +824,14 @@ show_help() {
 # ============================================================
 
 main() {
-    case "${1:-help}" in
+    # 如果没有参数，进入交互式菜单
+    if [ $# -eq 0 ]; then
+        interactive_mode
+        exit 0
+    fi
+
+    # 如果有参数，使用命令行模式（向后兼容）
+    case "${1}" in
         init)
             init_check
             ;;
@@ -477,11 +856,60 @@ main() {
         db)
             db_manage $2
             ;;
+        pm2)
+            case "$2" in
+                start)
+                    pm2_start
+                    ;;
+                stop)
+                    pm2_stop
+                    ;;
+                restart)
+                    pm2_restart
+                    ;;
+                status)
+                    pm2_status
+                    ;;
+                logs)
+                    pm2_logs $3
+                    ;;
+                delete)
+                    pm2_delete
+                    ;;
+                *)
+                    log_error "未知PM2命令: $2"
+                    echo "用法: $0 pm2 {start|stop|restart|status|logs|delete}"
+                    exit 1
+                    ;;
+            esac
+            ;;
+        pool)
+            case "$2" in
+                status)
+                    pool_status
+                    ;;
+                add)
+                    pool_add
+                    ;;
+                restart)
+                    pool_restart_bot $3
+                    ;;
+                *)
+                    log_error "未知Pool命令: $2"
+                    echo "用法: $0 pool {status|add|restart <id>}"
+                    exit 1
+                    ;;
+            esac
+            ;;
         clean)
             clean
             ;;
         help|--help|-h)
             show_help
+            ;;
+        menu)
+            # 显式进入交互式菜单
+            interactive_mode
             ;;
         *)
             log_error "未知命令: $1"

@@ -1,8 +1,10 @@
 """
 Telegram Bot 主程序 - 综合功能管理机器人
+支持多Bot负载均衡
 """
 import asyncio
 import os
+import redis
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -17,11 +19,75 @@ from shared.config.settings import settings, load_env_file
 from shared.database.init import db
 from shared.utils.logger import logger
 from shared.utils.license import LicenseManager
+from shared.utils.authorization import auth_manager
 
 from modules.tgapi.core import tgapi_manager
 from modules.account_manager.manager import account_manager
 from modules.converter.converter import conversion_pipeline
 from modules.auto_gen.autogen import autogen_tool
+
+# Bot Pool支持
+from bot.pool import BotPoolManager, LoadBalanceStrategy
+
+
+# 授权检查装饰器
+def require_authorization(func):
+    """要求用户授权的装饰器（支持命令和回调）"""
+    async def wrapper(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        telegram_id = user.id
+        username = user.username
+        full_name = user.full_name
+
+        # 检查授权
+        authorized, message, user_info = auth_manager.check_authorization(telegram_id)
+
+        if not authorized:
+            # 记录未授权访问
+            command = None
+            if update.message:
+                command = update.message.text
+            elif update.callback_query:
+                command = f"callback:{update.callback_query.data}"
+
+            auth_manager.log_unauthorized_access(
+                telegram_id=telegram_id,
+                username=username,
+                full_name=full_name,
+                command=command,
+                message=update.message.text if update.message else command
+            )
+
+            # 发送未授权消息
+            unauthorized_message = f"""
+⚠️ **未授权访问**
+
+{message}
+
+**您的信息**：
+👤 Telegram ID: `{telegram_id}`
+📛 用户名: @{username or '无'}
+👨 全名: {full_name or '无'}
+
+**如何获取授权？**
+1️⃣ 联系管理员
+2️⃣ 提供您的 Telegram ID: `{telegram_id}`
+3️⃣ 完成付款后管理员将为您授权
+
+💡 授权后即可使用机器人的所有功能！
+"""
+
+            # 根据update类型回复消息
+            if update.message:
+                await update.message.reply_text(unauthorized_message)
+            elif update.callback_query:
+                await update.callback_query.message.reply_text(unauthorized_message)
+            return
+
+        # 授权通过，执行原函数
+        return await func(self, update, context)
+
+    return wrapper
 
 
 class TGBotManager:
@@ -77,6 +143,7 @@ class TGBotManager:
 
         await update.message.reply_text(welcome_text, reply_markup=reply_markup)
 
+    @require_authorization
     async def menu_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """菜单命令"""
         keyboard = [
@@ -97,6 +164,7 @@ class TGBotManager:
 
         await update.message.reply_text("🎯 请选择功能:", reply_markup=reply_markup)
 
+    @require_authorization
     async def license_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """许可证命令"""
         user_id = update.effective_user.id
@@ -143,6 +211,7 @@ class TGBotManager:
 
         await update.message.reply_text(license_info, parse_mode='Markdown')
 
+    @require_authorization
     async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """统计信息命令"""
         stats = db.get_stats()
@@ -158,6 +227,7 @@ class TGBotManager:
 
         await update.message.reply_text(stats_text, parse_mode='Markdown')
 
+    @require_authorization
     async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """按钮回调处理"""
         query = update.callback_query
@@ -255,16 +325,233 @@ class TGBotManager:
 
         await query.edit_message_text(text, parse_mode='Markdown')
 
+    @require_authorization
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """处理普通消息"""
         # 处理文件上传（用于格式转换）
         if update.message.document:
+            await self.handle_file_upload(update, context)
+
+    async def handle_file_upload(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """处理文件上传和格式转换"""
+        from pathlib import Path
+        import tempfile
+        from modules.converter.converter import FormatConverter
+
+        document = update.message.document
+        file_name = document.file_name
+        user_id = update.effective_user.id
+
+        try:
             await update.message.reply_text("📁 文件已收到，正在处理...")
-            # TODO: 实现文件转换逻辑
+
+            # 下载文件到临时目录
+            file = await context.bot.get_file(document.file_id)
+            temp_dir = Path(tempfile.gettempdir()) / f"tgapi_uploads_{user_id}"
+            temp_dir.mkdir(parents=True, exist_ok=True)
+
+            input_file = temp_dir / file_name
+            await file.download_to_drive(str(input_file))
+
+            logger.info(f"📥 用户 {user_id} 上传文件: {file_name}")
+
+            # 检测文件类型
+            file_ext = input_file.suffix.lower()
+            file_type = None
+
+            if file_ext in ['.session']:
+                file_type = 'session'
+            elif file_ext in ['.json']:
+                file_type = 'json'
+            elif file_ext in ['.key', '.authkey']:
+                file_type = 'authkey'
+            elif file_name.lower() == 'tdata' or 'tdata' in file_name.lower():
+                file_type = 'tdata'
+            else:
+                await update.message.reply_text(
+                    f"❌ 不支持的文件类型: {file_ext}\n\n"
+                    "支持的格式：\n"
+                    "• .session - Session文件\n"
+                    "• .json - JSON格式\n"
+                    "• .key - AuthKey文件\n"
+                    "• tdata - TData文件夹（压缩为.zip）"
+                )
+                return
+
+            # 询问转换目标格式
+            keyboard = [
+                [
+                    InlineKeyboardButton("→ JSON", callback_data=f"convert_{file_type}_json_{input_file.name}"),
+                    InlineKeyboardButton("→ Session", callback_data=f"convert_{file_type}_session_{input_file.name}")
+                ],
+                [
+                    InlineKeyboardButton("→ AuthKey", callback_data=f"convert_{file_type}_authkey_{input_file.name}"),
+                    InlineKeyboardButton("→ TData", callback_data=f"convert_{file_type}_tdata_{input_file.name}")
+                ],
+                [InlineKeyboardButton("❌ 取消", callback_data="convert_cancel")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            await update.message.reply_text(
+                f"📝 文件类型: **{file_type.upper()}**\n"
+                f"📦 文件大小: {document.file_size / 1024:.2f} KB\n\n"
+                "请选择转换目标格式:",
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+
+            # 保存文件信息到context（用于后续转换）
+            context.user_data['pending_conversion'] = {
+                'input_file': str(input_file),
+                'input_type': file_type,
+                'user_id': user_id
+            }
+
+        except Exception as e:
+            error_msg = f"文件处理失败: {str(e)}"
+            logger.error(error_msg)
+            await update.message.reply_text(f"❌ {error_msg}")
+
+    async def handle_conversion_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """处理格式转换回调"""
+        from pathlib import Path
+        import tempfile
+        from modules.converter.converter import FormatConverter
+
+        query = update.callback_query
+        await query.answer()
+
+        callback_data = query.data
+
+        if callback_data == "convert_cancel":
+            await query.edit_message_text("❌ 转换已取消")
+            return
+
+        # 解析回调数据: convert_<source>_<target>_<filename>
+        parts = callback_data.split('_', 3)
+        if len(parts) < 4:
+            await query.edit_message_text("❌ 无效的转换请求")
+            return
+
+        _, source_format, target_format, _ = parts
+
+        # 获取之前保存的文件信息
+        if 'pending_conversion' not in context.user_data:
+            await query.edit_message_text("❌ 转换会话已过期，请重新上传文件")
+            return
+
+        conversion_info = context.user_data['pending_conversion']
+        input_file = Path(conversion_info['input_file'])
+        user_id = conversion_info['user_id']
+
+        if not input_file.exists():
+            await query.edit_message_text("❌ 文件已丢失，请重新上传")
+            return
+
+        try:
+            await query.edit_message_text("🔄 正在转换格式...")
+
+            converter = FormatConverter()
+            output_dir = input_file.parent / "output"
+            output_dir.mkdir(exist_ok=True)
+
+            # 读取输入文件
+            input_data = converter.load_from_file(str(input_file), source_format)
+
+            if not input_data:
+                await query.edit_message_text("❌ 无法读取输入文件")
+                return
+
+            # 执行转换
+            output_data = None
+            output_file = None
+
+            if source_format == 'session' and target_format == 'json':
+                # 需要API凭证
+                await query.edit_message_text(
+                    "🔑 Session转JSON需要API凭证\n\n"
+                    "请发送API ID和API Hash（用空格分隔）:\n"
+                    "例如: `12345678 abc123def456...`",
+                    parse_mode='Markdown'
+                )
+                return
+
+            elif source_format == 'json' and target_format == 'session':
+                output_data = converter.json_to_session(input_data)
+                output_file = output_dir / f"{input_file.stem}.session"
+
+            elif source_format == 'session' and target_format == 'authkey':
+                output_data = converter.session_to_authkey(input_data)
+                output_file = output_dir / f"{input_file.stem}.key"
+
+            else:
+                await query.edit_message_text(f"⚠️ 暂不支持 {source_format} → {target_format} 的转换")
+                return
+
+            # 保存输出文件
+            if output_data:
+                converter.save_to_file(output_data, str(output_file), target_format)
+
+                # 发送转换后的文件
+                await query.edit_message_text("✅ 转换完成！正在发送文件...")
+
+                with open(output_file, 'rb') as f:
+                    await context.bot.send_document(
+                        chat_id=query.message.chat_id,
+                        document=f,
+                        filename=output_file.name,
+                        caption=f"✅ 转换完成\n\n"
+                                f"源格式: {source_format.upper()}\n"
+                                f"目标格式: {target_format.upper()}"
+                    )
+
+                # 清理临时文件
+                input_file.unlink()
+                output_file.unlink()
+
+                logger.info(f"✅ 用户 {user_id} 完成格式转换: {source_format} → {target_format}")
+
+            else:
+                await query.edit_message_text("❌ 转换失败")
+
+        except Exception as e:
+            error_msg = f"转换失败: {str(e)}"
+            logger.error(error_msg)
+            await query.edit_message_text(f"❌ {error_msg}")
+
+
+async def setup_handlers(application: Application):
+    """
+    为Application设置handlers
+    此函数会被BotPoolManager用于初始化每个bot实例
+    """
+    # 创建Bot管理器
+    bot_manager = TGBotManager()
+
+    # 注册命令处理器
+    application.add_handler(CommandHandler("start", bot_manager.start_command))
+    application.add_handler(CommandHandler("menu", bot_manager.menu_command))
+    application.add_handler(CommandHandler("license", bot_manager.license_command))
+    application.add_handler(CommandHandler("stats", bot_manager.stats_command))
+
+    # 注册回调处理器（按优先级注册）
+    # 1. 格式转换回调（convert_开头）
+    application.add_handler(CallbackQueryHandler(
+        bot_manager.handle_conversion_callback,
+        pattern='^convert_'
+    ))
+
+    # 2. 其他所有回调
+    application.add_handler(CallbackQueryHandler(bot_manager.button_callback))
+
+    # 注册消息处理器
+    application.add_handler(MessageHandler(filters.ALL, bot_manager.handle_message))
+
+    logger.debug("✅ Handlers设置完成")
 
 
 async def main():
-    """主函数"""
+    """主函数 - 支持Bot Pool负载均衡"""
     # 加载环境变量
     load_env_file()
 
@@ -280,37 +567,77 @@ async def main():
     logger.info("正在初始化数据库...")
     db.initialize()
 
-    # 执行租户schema（如果尚未执行）
+    # 执行bot_pool_schema（如果尚未执行）
     try:
-        with open("shared/database/tenant_schema.sql", 'r', encoding='utf-8') as f:
+        # 执行Bot Pool schema
+        with open("shared/database/bot_pool_schema.sql", 'r', encoding='utf-8') as f:
+            schema_sql = f.read()
+            # 移除DELIMITER语句（Python DB-API不支持）
+            schema_sql = schema_sql.replace('DELIMITER //', '').replace('DELIMITER ;', '')
+            for statement in schema_sql.split(';'):
+                if statement.strip():
+                    db.execute(statement)
+        logger.info("✅ Bot Pool schema初始化成功")
+    except Exception as e:
+        logger.warning(f"执行Bot Pool schema失败（可能已存在）: {str(e)}")
+
+    # 执行授权用户schema（如果尚未执行）
+    try:
+        with open("shared/database/authorized_users_schema.sql", 'r', encoding='utf-8') as f:
             schema_sql = f.read()
             db.conn.executescript(schema_sql)
             db.conn.commit()
+        logger.info("✅ 授权用户schema初始化成功")
     except Exception as e:
-        logger.warning(f"执行租户schema失败（可能已存在）: {str(e)}")
+        logger.warning(f"执行授权用户schema失败（可能已存在）: {str(e)}")
 
-    # 创建应用
-    logger.info("正在启动Telegram Bot...")
-    application = Application.builder().token(settings.telegram.bot_token).build()
+    # 检查是否启用Bot Pool模式
+    use_bot_pool = os.getenv("ENABLE_BOT_POOL", "false").lower() == "true"
 
-    # 创建Bot管理器
-    bot_manager = TGBotManager()
+    if use_bot_pool:
+        logger.info("🚀 启动模式: Bot Pool (负载均衡)")
 
-    # 注册命令处理器
-    application.add_handler(CommandHandler("start", bot_manager.start_command))
-    application.add_handler(CommandHandler("menu", bot_manager.menu_command))
-    application.add_handler(CommandHandler("license", bot_manager.license_command))
-    application.add_handler(CommandHandler("stats", bot_manager.stats_command))
+        # 初始化Redis连接
+        redis_client = redis.Redis(
+            host=os.getenv("REDIS_HOST", "localhost"),
+            port=int(os.getenv("REDIS_PORT", 6379)),
+            db=int(os.getenv("REDIS_DB", 0)),
+            decode_responses=True
+        )
 
-    # 注册回调处理器
-    application.add_handler(CallbackQueryHandler(bot_manager.button_callback))
+        # 创建BotPoolManager
+        pool_manager = BotPoolManager(
+            redis_client=redis_client,
+            handlers_setup_func=setup_handlers,
+            lb_strategy=LoadBalanceStrategy.LEAST_CONNECTIONS
+        )
 
-    # 注册消息处理器
-    application.add_handler(MessageHandler(filters.ALL, bot_manager.handle_message))
+        # 初始化Bot池（从数据库加载所有bot配置）
+        await pool_manager.initialize()
 
-    # 启动Bot
-    logger.info("✅ Bot启动成功！")
-    await application.run_polling()
+        # 启动Bot池
+        await pool_manager.start()
+
+        # 保持运行
+        logger.info("✅ Bot Pool运行中...")
+        try:
+            await asyncio.Event().wait()
+        except KeyboardInterrupt:
+            logger.info("收到停止信号，正在关闭...")
+            await pool_manager.stop()
+
+    else:
+        logger.info("🚀 启动模式: 单Bot (传统)")
+
+        # 传统单Bot模式
+        application = Application.builder().token(settings.telegram.bot_token).build()
+
+        # 设置handlers
+        await setup_handlers(application)
+
+        # 启动Bot
+        logger.info("✅ Bot启动成功！")
+        await application.run_polling()
 
 
 if __name__ == "__main__":

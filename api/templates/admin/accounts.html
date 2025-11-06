@@ -1,0 +1,285 @@
+{% extends "admin/base.html" %}
+
+{% block title %}账号管理{% endblock %}
+{% block page_title %}账号管理{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div class="d-flex justify-content-between align-items-center">
+        <div>
+            <h1 class="page-title">
+                <i class="bi bi-people"></i> 账号管理
+            </h1>
+            <p class="text-muted">查看和管理所有Telegram账号 (共 {{ total }} 个账号)</p>
+        </div>
+        <div>
+            <button class="btn btn-outline-success me-2" onclick="exportAccounts()">
+                <i class="bi bi-download"></i> 导出CSV
+            </button>
+            <button class="btn btn-danger" id="bulkDeleteBtn" style="display: none;" onclick="bulkDeleteAccounts()">
+                <i class="bi bi-trash"></i> 批量删除 (<span id="selectedCount">0</span>)
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- 高级搜索 -->
+<div class="card border-0 shadow-sm mb-4">
+    <div class="card-body">
+        <form method="get" class="row g-3 align-items-end" id="searchForm">
+            <div class="col-md-3">
+                <label class="form-label">搜索</label>
+                <input type="text" class="form-control" name="search"
+                       value="{{ search or '' }}"
+                       placeholder="手机号或用户名">
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">状态筛选</label>
+                <select class="form-select" name="status_filter">
+                    <option value="">全部</option>
+                    <option value="active" {% if status_filter == 'active' %}selected{% endif %}>活跃</option>
+                    <option value="banned" {% if status_filter == 'banned' %}selected{% endif %}>已封禁</option>
+                    <option value="expired" {% if status_filter == 'expired' %}selected{% endif %}>已过期</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">租户筛选</label>
+                <select class="form-select" name="tenant_id">
+                    <option value="">全部租户</option>
+                    {% for tenant in tenants %}
+                    <option value="{{ tenant.id }}" {% if tenant_id == tenant.id %}selected{% endif %}>
+                        {{ tenant.full_name or tenant.username or tenant.telegram_id }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">每页显示</label>
+                <select class="form-select" name="per_page">
+                    <option value="25" {% if per_page == 25 %}selected{% endif %}>25</option>
+                    <option value="50" {% if per_page == 50 %}selected{% endif %}>50</option>
+                    <option value="100" {% if per_page == 100 %}selected{% endif %}>100</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <button type="submit" class="btn btn-primary w-100">
+                    <i class="bi bi-search"></i> 搜索
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- 账号列表 -->
+<div class="card border-0 shadow-sm">
+    <div class="card-header bg-white d-flex justify-content-between align-items-center">
+        <h5 class="mb-0">
+            <i class="bi bi-list-ul"></i> 账号列表
+            {% if status_filter or tenant_id or search %}
+                <span class="text-muted">(已筛选: {{ accounts|length }} / {{ total }})</span>
+            {% endif %}
+        </h5>
+        {% if accounts %}
+        <div class="form-check">
+            <input class="form-check-input" type="checkbox" id="selectAll" onchange="toggleSelectAll()">
+            <label class="form-check-label" for="selectAll">
+                全选
+            </label>
+        </div>
+        {% endif %}
+    </div>
+    <div class="card-body p-0">
+        {% if accounts %}
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th width="40">
+                            <input type="checkbox" class="form-check-input" id="selectAllInTable" onchange="toggleSelectAll()">
+                        </th>
+                        <th>ID</th>
+                        <th>手机号</th>
+                        <th>用户名</th>
+                        <th>租户</th>
+                        <th>Session类型</th>
+                        <th>状态</th>
+                        <th>最后检查</th>
+                        <th>创建时间</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for account in accounts %}
+                    <tr>
+                        <td>
+                            <input type="checkbox" class="form-check-input account-checkbox"
+                                   value="{{ account.id }}" onchange="updateBulkDeleteBtn()">
+                        </td>
+                        <td>{{ account.id }}</td>
+                        <td><code>{{ account.phone }}</code></td>
+                        <td>{{ account.username or '-' }}</td>
+                        <td>
+                            {% if account.tenant_full_name %}
+                                <span class="badge bg-info">{{ account.tenant_full_name }}</span>
+                            {% elif account.tenant_id %}
+                                <span class="badge bg-secondary">ID: {{ account.tenant_id }}</span>
+                            {% else %}
+                                <span class="text-muted">-</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <span class="badge bg-secondary">{{ account.session_type }}</span>
+                        </td>
+                        <td>
+                            {% if account.status == 'active' %}
+                                <span class="status-badge bg-success">活跃</span>
+                            {% elif account.status == 'banned' %}
+                                <span class="status-badge bg-danger">已封禁</span>
+                            {% elif account.status == 'expired' %}
+                                <span class="status-badge bg-warning">已过期</span>
+                            {% else %}
+                                <span class="status-badge bg-secondary">未知</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ account.last_check or '从未' }}</td>
+                        <td>{{ account.created_at }}</td>
+                        <td>
+                            <a href="/admin/accounts/{{ account.id }}" class="btn btn-sm btn-outline-primary btn-action">
+                                <i class="bi bi-eye"></i> 详情
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- 分页 -->
+        {% if total_pages > 1 %}
+        <div class="card-footer bg-white">
+            <nav>
+                <ul class="pagination justify-content-center mb-0">
+                    <li class="page-item {% if page <= 1 %}disabled{% endif %}">
+                        <a class="page-link" href="?page={{ page - 1 }}&status_filter={{ status_filter or '' }}&tenant_id={{ tenant_id or '' }}&search={{ search or '' }}&per_page={{ per_page }}">
+                            <i class="bi bi-chevron-left"></i> 上一页
+                        </a>
+                    </li>
+
+                    {% for p in range(1, total_pages + 1) %}
+                        {% if p == 1 or p == total_pages or (p >= page - 2 and p <= page + 2) %}
+                            <li class="page-item {% if p == page %}active{% endif %}">
+                                <a class="page-link" href="?page={{ p }}&status_filter={{ status_filter or '' }}&tenant_id={{ tenant_id or '' }}&search={{ search or '' }}&per_page={{ per_page }}">
+                                    {{ p }}
+                                </a>
+                            </li>
+                        {% elif p == page - 3 or p == page + 3 %}
+                            <li class="page-item disabled">
+                                <span class="page-link">...</span>
+                            </li>
+                        {% endif %}
+                    {% endfor %}
+
+                    <li class="page-item {% if page >= total_pages %}disabled{% endif %}">
+                        <a class="page-link" href="?page={{ page + 1 }}&status_filter={{ status_filter or '' }}&tenant_id={{ tenant_id or '' }}&search={{ search or '' }}&per_page={{ per_page }}">
+                            下一页 <i class="bi bi-chevron-right"></i>
+                        </a>
+                    </li>
+                </ul>
+            </nav>
+            <div class="text-center text-muted mt-2">
+                第 {{ page }} / {{ total_pages }} 页，共 {{ total }} 条记录
+            </div>
+        </div>
+        {% endif %}
+
+        {% else %}
+        <div class="text-center py-5">
+            <i class="bi bi-inbox" style="font-size: 4rem; color: #ccc;"></i>
+            <p class="text-muted mt-3">
+                {% if status_filter or tenant_id or search %}
+                    没有找到符合条件的账号
+                {% else %}
+                    暂无账号数据
+                {% endif %}
+            </p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// 全选/取消全选
+function toggleSelectAll() {
+    const selectAll = document.getElementById('selectAll') || document.getElementById('selectAllInTable');
+    const checkboxes = document.querySelectorAll('.account-checkbox');
+    checkboxes.forEach(cb => cb.checked = selectAll.checked);
+    updateBulkDeleteBtn();
+}
+
+// 更新批量删除按钮
+function updateBulkDeleteBtn() {
+    const checkboxes = document.querySelectorAll('.account-checkbox:checked');
+    const count = checkboxes.length;
+    const btn = document.getElementById('bulkDeleteBtn');
+    const countSpan = document.getElementById('selectedCount');
+
+    if (count > 0) {
+        btn.style.display = 'inline-block';
+        countSpan.textContent = count;
+    } else {
+        btn.style.display = 'none';
+    }
+
+    // 更新全选复选框状态
+    const allCheckboxes = document.querySelectorAll('.account-checkbox');
+    const selectAll = document.getElementById('selectAll') || document.getElementById('selectAllInTable');
+    if (selectAll) {
+        selectAll.checked = (count === allCheckboxes.length && count > 0);
+    }
+}
+
+// 批量删除
+function bulkDeleteAccounts() {
+    const checkboxes = document.querySelectorAll('.account-checkbox:checked');
+    const ids = Array.from(checkboxes).map(cb => cb.value);
+
+    if (ids.length === 0) {
+        alert('请先选择要删除的账号');
+        return;
+    }
+
+    if (!confirm(`确定要删除选中的 ${ids.length} 个账号吗？此操作不可撤销！`)) {
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('account_ids', ids.join(','));
+
+    fetch('/admin/accounts/bulk-delete', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert('批量删除成功！');
+            location.reload();
+        } else {
+            alert('批量删除失败：' + data.message);
+        }
+    })
+    .catch(error => {
+        alert('批量删除失败：' + error);
+    });
+}
+
+// 导出CSV
+function exportAccounts() {
+    const form = document.getElementById('searchForm');
+    const params = new URLSearchParams(new FormData(form));
+    window.location.href = '/admin/accounts/export?' + params.toString();
+}
+</script>
+{% endblock %}

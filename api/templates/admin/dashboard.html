@@ -1,0 +1,433 @@
+{% extends "admin/base.html" %}
+
+{% block title %}仪表板{% endblock %}
+{% block page_title %}系统仪表板{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">
+        <i class="bi bi-speedometer2"></i> 系统概览
+    </h1>
+    <p class="text-muted">欢迎回来，{{ user }}！当前时间：{{ current_time }}</p>
+</div>
+
+<!-- 统计卡片 -->
+<div class="row g-4 mb-4">
+    <!-- 账号总数 -->
+    <div class="col-md-3">
+        <div class="card stat-card border-0 shadow-sm">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="text-muted mb-2">账号总数</h6>
+                        <h2 class="mb-0">{{ stats.accounts }}</h2>
+                    </div>
+                    <div class="icon text-primary">
+                        <i class="bi bi-people-fill"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 活跃TGAPI会话 -->
+    <div class="col-md-3">
+        <div class="card stat-card border-0 shadow-sm">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="text-muted mb-2">活跃会话</h6>
+                        <h2 class="mb-0">{{ active_sessions }}</h2>
+                    </div>
+                    <div class="icon text-success">
+                        <i class="bi bi-link-45deg"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 租户数量 -->
+    <div class="col-md-3">
+        <div class="card stat-card border-0 shadow-sm">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="text-muted mb-2">租户数量</h6>
+                        <h2 class="mb-0">{{ stats.tenants }}</h2>
+                    </div>
+                    <div class="icon text-warning">
+                        <i class="bi bi-building"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 代理数量 -->
+    <div class="col-md-3">
+        <div class="card stat-card border-0 shadow-sm">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="text-muted mb-2">代理数量</h6>
+                        <h2 class="mb-0">{{ proxy_stats.count }}</h2>
+                    </div>
+                    <div class="icon text-info">
+                        <i class="bi bi-hdd-network-fill"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 数据统计图表 -->
+<div class="row g-4 mb-4">
+    <!-- 账号增长趋势 -->
+    <div class="col-lg-8">
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-graph-up"></i> 账号增长趋势</h5>
+                <select class="form-select form-select-sm" style="width: auto;" id="growthDays" onchange="loadGrowthChart()">
+                    <option value="7">最近7天</option>
+                    <option value="30" selected>最近30天</option>
+                    <option value="90">最近90天</option>
+                </select>
+            </div>
+            <div class="card-body">
+                <canvas id="growthChart" style="height: 300px;"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- 账号状态分布 -->
+    <div class="col-lg-4">
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white">
+                <h5 class="mb-0"><i class="bi bi-pie-chart"></i> 账号状态分布</h5>
+            </div>
+            <div class="card-body">
+                <canvas id="statusChart" style="height: 300px;"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-4 mb-4">
+    <!-- TGAPI调用统计 -->
+    <div class="col-lg-6">
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white">
+                <h5 class="mb-0"><i class="bi bi-bar-chart"></i> TGAPI调用统计</h5>
+            </div>
+            <div class="card-body">
+                <canvas id="tgapiChart" style="height: 250px;"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- 租户等级分布 -->
+    <div class="col-lg-6">
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white">
+                <h5 class="mb-0"><i class="bi bi-people"></i> 租户等级分布</h5>
+            </div>
+            <div class="card-body">
+                <canvas id="tenantChart" style="height: 250px;"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 快速操作 -->
+<div class="row g-4 mb-4">
+    <div class="col-md-6">
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white">
+                <h5 class="mb-0"><i class="bi bi-lightning-fill"></i> 快速操作</h5>
+            </div>
+            <div class="card-body">
+                <div class="d-grid gap-2">
+                    <a href="/admin/proxies" class="btn btn-outline-primary">
+                        <i class="bi bi-plus-circle"></i> 添加代理
+                    </a>
+                    <a href="/admin/users" class="btn btn-outline-success">
+                        <i class="bi bi-person-plus"></i> 授权用户
+                    </a>
+                    <a href="/admin/accounts" class="btn btn-outline-info">
+                        <i class="bi bi-people"></i> 查看账号
+                    </a>
+                    <a href="/admin/export/excel" class="btn btn-outline-warning">
+                        <i class="bi bi-file-earmark-excel"></i> 导出Excel报表
+                    </a>
+                    <a href="/admin/logs" class="btn btn-outline-secondary">
+                        <i class="bi bi-file-text"></i> 查看日志
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6">
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white">
+                <h5 class="mb-0"><i class="bi bi-hdd-network"></i> 代理池状态</h5>
+            </div>
+            <div class="card-body">
+                {% if proxy_stats.count > 0 %}
+                <div class="alert alert-success">
+                    <i class="bi bi-check-circle-fill"></i> 代理池运行正常，共 {{ proxy_stats.count }} 个代理
+                </div>
+                <div class="list-group">
+                    {% for proxy in proxy_stats.proxies[:5] %}
+                    <div class="list-group-item d-flex justify-content-between align-items-center">
+                        <span class="text-truncate">{{ proxy }}</span>
+                        <span class="badge bg-success">在线</span>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% if proxy_stats.count > 5 %}
+                <div class="mt-2 text-center">
+                    <a href="/admin/proxies" class="btn btn-sm btn-link">查看全部 {{ proxy_stats.count }} 个代理</a>
+                </div>
+                {% endif %}
+                {% else %}
+                <div class="alert alert-warning">
+                    <i class="bi bi-exclamation-triangle-fill"></i> 代理池为空，系统将使用直连模式
+                </div>
+                <a href="/admin/proxies" class="btn btn-primary">
+                    <i class="bi bi-plus-circle"></i> 添加第一个代理
+                </a>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 系统信息 -->
+<div class="row">
+    <div class="col-12">
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white">
+                <h5 class="mb-0"><i class="bi bi-info-circle"></i> 系统信息</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <table class="table table-sm">
+                            <tr>
+                                <th width="40%">系统版本</th>
+                                <td>v1.0.0</td>
+                            </tr>
+                            <tr>
+                                <th>数据库类型</th>
+                                <td>SQLite / MySQL</td>
+                            </tr>
+                            <tr>
+                                <th>缓存系统</th>
+                                <td>Redis</td>
+                            </tr>
+                        </table>
+                    </div>
+                    <div class="col-md-6">
+                        <table class="table table-sm">
+                            <tr>
+                                <th width="40%">账号总数</th>
+                                <td>{{ stats.accounts }}</td>
+                            </tr>
+                            <tr>
+                                <th>会话总数</th>
+                                <td>{{ stats.tgapi_sessions }}</td>
+                            </tr>
+                            <tr>
+                                <th>租户总数</th>
+                                <td>{{ stats.tenants }}</td>
+                            </tr>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+let growthChart, statusChart, tgapiChart, tenantChart;
+
+// 加载账号增长趋势图
+function loadGrowthChart() {
+    const days = document.getElementById('growthDays').value;
+    fetch(`/admin/api/stats/growth?days=${days}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const ctx = document.getElementById('growthChart');
+                if (growthChart) {
+                    growthChart.destroy();
+                }
+                growthChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: data.data.labels,
+                        datasets: [{
+                            label: '新增账号',
+                            data: data.data.values,
+                            borderColor: 'rgb(13, 110, 253)',
+                            backgroundColor: 'rgba(13, 110, 253, 0.1)',
+                            tension: 0.4,
+                            fill: true
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                display: true
+                            }
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                ticks: {
+                                    stepSize: 1
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+        })
+        .catch(error => console.error('加载增长趋势图失败:', error));
+}
+
+// 加载账号状态分布图
+function loadStatusChart() {
+    fetch('/admin/api/stats/account-status')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const ctx = document.getElementById('statusChart');
+                statusChart = new Chart(ctx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: data.data.labels,
+                        datasets: [{
+                            data: data.data.values,
+                            backgroundColor: [
+                                'rgba(25, 135, 84, 0.8)',   // success - active
+                                'rgba(220, 53, 69, 0.8)',   // danger - banned
+                                'rgba(255, 193, 7, 0.8)',   // warning - expired
+                                'rgba(108, 117, 125, 0.8)'  // secondary - other
+                            ]
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                position: 'bottom'
+                            }
+                        }
+                    }
+                });
+            }
+        })
+        .catch(error => console.error('加载状态分布图失败:', error));
+}
+
+// 加载TGAPI调用统计图
+function loadTgapiChart() {
+    fetch('/admin/api/stats/tgapi-calls?days=7')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const ctx = document.getElementById('tgapiChart');
+                tgapiChart = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: data.data.labels,
+                        datasets: [{
+                            label: '累计调用次数',
+                            data: data.data.values,
+                            backgroundColor: 'rgba(13, 202, 240, 0.8)',
+                            borderColor: 'rgb(13, 202, 240)',
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                display: true
+                            }
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: true
+                            }
+                        }
+                    }
+                });
+            }
+        })
+        .catch(error => console.error('加载TGAPI统计图失败:', error));
+}
+
+// 加载租户等级分布图
+function loadTenantChart() {
+    fetch('/admin/api/stats/tenant-usage')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const ctx = document.getElementById('tenantChart');
+                tenantChart = new Chart(ctx, {
+                    type: 'pie',
+                    data: {
+                        labels: data.data.labels,
+                        datasets: [{
+                            data: data.data.values,
+                            backgroundColor: [
+                                'rgba(108, 117, 125, 0.8)',  // Basic
+                                'rgba(13, 202, 240, 0.8)',   // Premium
+                                'rgba(255, 193, 7, 0.8)'     // VIP
+                            ]
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                position: 'bottom'
+                            }
+                        }
+                    }
+                });
+            }
+        })
+        .catch(error => console.error('加载租户分布图失败:', error));
+}
+
+// 页面加载时初始化所有图表
+document.addEventListener('DOMContentLoaded', function() {
+    loadGrowthChart();
+    loadStatusChart();
+    loadTgapiChart();
+    loadTenantChart();
+});
+
+// 自动刷新图表（每60秒）
+setInterval(function() {
+    loadGrowthChart();
+    loadStatusChart();
+    loadTgapiChart();
+    loadTenantChart();
+}, 60000);
+</script>
+{% endblock %}

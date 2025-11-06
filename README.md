@@ -1,182 +1,255 @@
-# 🤖 TG Bot Manager - Telegram账号综合管理系统
+# TGAPI - Telegram账号综合管理系统
 
-一个功能强大的Telegram账号管理机器人，集成了TGAPI接码、账号管理、格式转换和自动做号等功能。
+> 🚀 强大的Telegram多账号管理平台 + Bot Pool负载均衡 + Web管理后台
 
-## ✨ 核心功能
+## ⭐ 核心特性
 
-### 📱 TGAPI接码模块
-将TG账号协议转换为在线API接码链接
-- ✅ 实时验证码推送
-- ✅ 自定义版权和2FA显示
-- ✅ 设置过期时间和登录次数限制
-- ✅ WebSocket实时通信
+### 🤖 智能Bot系统
+- **Bot Pool负载均衡** - 多bot自动分配用户，高可用
+- **用户授权管理** - 灵活租户系统（1月/3月/6月/1年/永久）
+- **会话保持** - 同用户固定使用同一bot
+- **健康监控** - 30秒心跳检查，自动故障隔离
+- **日志管理** - 每日自动切割，30天自动清理
+- **进程管理** - 支持Docker/PM2/手动三种部署方式
 
-### 🛡️ 账号全功能处理
-全方位的TG账号管理工具
-- ✅ **防找回** - 修改密码、启用2FA、绑定邮箱
-- ✅ **筛活** - 批量检测账号状态
-- ✅ **账号清理** - 清除聊天记录、退出群组
-- ✅ **账号维护** - 定期保活操作
+### 📱 TGAPI接码系统
+- **Session转API** - 将Session文件转为Web接码链接
+- **多格式支持** - Telethon/Pyrogram/TData
+- **限制控制** - 登录次数和过期时间限制
 
-### 🔄 格式转换器
-支持多种TG账号格式互转
-- ✅ TData ⟷ Session
-- ✅ Session ⟷ JSON
-- ✅ Session ⟷ AuthKey
-- ✅ Telethon ⟷ Pyrogram
-- ✅ 所有格式互转
+### 🏢 多租户账号管理
+- **账号池管理** - 批量导入、搜索、批量操作
+- **格式转换** - Session/TData/JSON/AuthKey互转
+- **状态监控** - 实时检查账号状态
 
-### 🔨 逆向自动做号工具
-基于TGAPI的自动做号工具
-- ✅ 输入 API ID + Hash
-- ✅ 自动生成新设备登录
-- ✅ 输出多种格式: TData/Session/JSON/密钥
-
-### 🔐 租户系统与反盗版
-多租户系统，支持许可证管理
-- ✅ 许可证密钥验证
-- ✅ 硬件绑定（设备指纹）
-- ✅ 多设备限制
-- ✅ 使用统计和配额管理
+### 🖥️ Web管理后台
+- **实时监控** - 4个可视化图表
+- **Bot Pool管理** - 动态添加/删除bot
+- **用户授权** - 在线授权，查看未授权日志
+- **Excel导出** - 完整数据报表
 
 ## 🚀 快速开始
 
-### 方式一：使用智能启动脚本（推荐）
-
+### 1. 环境要求
 ```bash
-# 1. 克隆项目
-git clone <your-repo-url>
+# 必需
+Python 3.9+
+MySQL 8.0+ (生产环境推荐)
+
+# 或使用（开发/测试）
+SQLite 3.31+ (Python内置，无需安装)
+
+# 可选
+Redis 7.0+ (Bot Pool模式需要)
+Node.js 14+ + PM2 (使用PM2进程管理时需要)
+Docker + Docker Compose (使用Docker部署时需要)
+```
+
+**💡 数据库选择**：
+- **MySQL 8.0+**（推荐）：生产环境、大规模部署、支持分布式
+- **SQLite**：开发测试、个人使用、中小规模（< 10万用户）
+- 支持一键切换：修改 `.env` 中的 `DATABASE_TYPE`
+
+### 2. 安装
+```bash
+git clone https://github.com/yourusername/TGAPI.git
 cd TGAPI
-
-# 2. 一键初始化环境
-./start.sh init
-
-# 3. 编辑配置文件
-nano .env
-# 至少需要设置: BOT_TOKEN, API_ID, API_HASH, API_BASE_URL
-
-# 4. 启动服务
-./start.sh start
-
-# 5. 查看日志
-./start.sh logs
-```
-
-### 方式二：Docker Compose
-
-```bash
-# 1. 复制环境配置
-cp .env.example .env
-nano .env
-
-# 2. 启动容器
-docker-compose up -d
-
-# 3. 查看状态
-docker-compose ps
-
-# 4. 查看日志
-docker-compose logs -f
-```
-
-### 方式三：手动部署
-
-```bash
-# 1. 创建虚拟环境
-python3 -m venv venv
-source venv/bin/activate
-
-# 2. 安装依赖
 pip install -r requirements.txt
-
-# 3. 配置环境变量
-cp .env.example .env
-nano .env
-
-# 4. 初始化数据库
-python -c "from shared.database.init import db; db.initialize()"
-
-# 5. 启动API服务器（终端1）
-python -m api.server
-
-# 6. 启动Bot（终端2）
-python -m bot.main
 ```
 
-## 📋 环境配置
-
-编辑 `.env` 文件：
-
+### 3. 配置
 ```bash
-# Telegram Bot配置
+cp .env.example .env
+# 编辑 .env 文件，填入你的配置
+```
+
+**最小配置：**
+```bash
 BOT_TOKEN=your_bot_token_here
 API_ID=your_api_id_here
 API_HASH=your_api_hash_here
-
-# 管理员用户ID（多个用逗号分隔）
-ADMIN_USER_IDS=123456789,987654321
-
-# API服务配置
-SERVER_PORT=52000
-API_BASE_URL=https://api.yourdomain.com
-# 如果使用HTTP: API_BASE_URL=http://yourdomain.com:52000
-
-# 调试模式
-DEBUG=false
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=your_password
 ```
 
-## 🎯 start.sh 使用指南
+### 4. 启动
 
-智能多功能启动脚本，支持以下命令：
-
+#### 🎯 方式一：交互式菜单（推荐）
 ```bash
-./start.sh init          # 一键环境检测和初始化
-./start.sh start        # 启动Docker容器
-./start.sh stop         # 停止Docker容器
-./start.sh restart      # 重启Docker容器
-./start.sh status       # 查看容器状态
-./start.sh logs         # 查看所有日志（实时）
-./start.sh test         # 测试模式运行（不使用Docker）
-./start.sh db init      # 初始化数据库
-./start.sh db backup    # 备份数据库
-./start.sh clean        # 清理容器和数据
-./start.sh help         # 显示帮助信息
+./start.sh
+```
+进入交互式菜单，选择对应编号即可：
+```
+【Docker模式】
+  1)  🔧 环境初始化检测
+  2)  ▶️  启动Docker容器
+  3)  ⏸️  停止Docker容器
+  ...
+
+【PM2模式】
+  11) ▶️  使用PM2启动服务
+  12) ⏸️  停止PM2服务
+  ...
+
+【Bot Pool管理】
+  21) 📊 查看Bot Pool状态
+  22) ➕ 添加Bot到池中
+  23) 🔄 重启指定Bot
 ```
 
-## 📚 API接口文档
-
-API服务默认运行在 `http://localhost:52000`
-
-### 获取验证码（TGAPI核心接口）
+#### 🐳 方式二：Docker模式
 ```bash
-GET /api/code/{api_token}?timeout=60
+# 初始化环境
+./start.sh init
+
+# 启动所有服务（Bot + API + Redis + MySQL）
+./start.sh start
+
+# 查看日志
+./start.sh logs
+
+# 停止服务
+./start.sh stop
 ```
 
-### 创建TGAPI链接
+#### ⚡ 方式三：PM2模式（生产推荐）
 ```bash
-POST /api/tgapi/create
+# 安装PM2
+npm install -g pm2
+
+# 初始化环境
+./start.sh init
+
+# 启动服务
+./start.sh pm2 start
+
+# 查看状态
+./start.sh pm2 status
+
+# 实时监控
+pm2 monit
+
+# 查看日志
+./start.sh pm2 logs
 ```
 
-## 🤖 Bot命令列表
+#### 🔧 方式四：手动启动
+**单Bot模式**：
+```bash
+# 启动Bot
+python -m bot.main
 
-```
-/start         - 显示欢迎信息和功能菜单
-/menu          - 打开功能菜单
-/tgapi         - TGAPI接码功能
-/account       - 账号管理功能
-/convert       - 格式转换功能
-/autogen       - 自动做号功能
-/stats         - 查看统计信息
-/license       - 许可证管理
+# 启动API服务（新终端）
+python -m api.server
 ```
 
-## ⚠️ 注意事项
+**Bot Pool模式**：
+```bash
+# 1. 启动Redis
+docker run -d -p 6379:6379 redis
 
-1. **首次使用必须执行初始化**: `./start.sh init`
-2. **必须配置环境变量**: BOT_TOKEN、API_ID、API_HASH、API_BASE_URL
-3. **默认端口**: 52000（可通过SERVER_PORT修改）
-4. **文档字符串**: 所有文件开头的 `"""..."""` 是Python docstring，不影响运行
+# 2. 修改 .env
+ENABLE_BOT_POOL=true
+
+# 3. 启动服务
+python -m bot.main
+python -m api.server
+
+# 4. 访问后台添加多个bot
+http://localhost:8000/admin/bot-pool
+```
+
+### 5. 访问管理后台
+```
+URL: http://localhost:8000/admin
+账号: admin
+密码: (你在.env设置的密码)
+```
+
+## 📚 文档
+
+- **[机器人使用手册.md](机器人使用手册.md)** - 详细功能说明和使用教程
+- **[部署与配置.md](部署与配置.md)** - 技术架构和配置指南
+
+## 🎯 核心功能
+
+### 1. TGAPI接码
+将Telegram账号转为Web接码API
+```
+功能：上传Session → 生成链接 → 用户访问 → 获取验证码
+支持：限制登录次数、设置过期时间
+```
+
+### 2. 账号管理
+多账号统一管理
+```
+功能：批量导入、高级搜索、状态监控、批量删除
+支持：按租户隔离、账号详情查看
+```
+
+### 3. 格式转换
+13种格式互转
+```
+支持：Session ⟷ TData ⟷ JSON ⟷ AuthKey
+格式：Telethon/Pyrogram Session文件
+```
+
+### 4. 自动做号
+基于TGAPI生成新号
+```
+输入：API ID + Hash + 手机号
+输出：Session/TData/JSON
+```
+
+### 5. Bot Pool负载均衡
+多bot高可用架构
+```
+特性：智能分配、会话保持、健康检查、故障隔离
+策略：最少连接/加权随机/优先级
+```
+
+## 🏗️ 项目结构
+```
+TGAPI/
+├── bot/main.py           # Bot主程序
+├── bot/pool/             # Bot Pool负载均衡
+├── api/server.py         # Web API服务
+├── api/admin/            # 管理后台
+├── modules/              # 功能模块
+│   ├── tgapi/           # TGAPI接码
+│   ├── account_manager/ # 账号管理
+│   ├── converter/       # 格式转换
+│   └── auto_gen/        # 自动做号
+├── shared/               # 共享组件
+└── docs/                 # 文档目录
+```
+
+## 🔒 安全特性
+- ✅ Session加密存储
+- ✅ 防爆破登录（5次失败锁定15分钟）
+- ✅ HttpOnly Cookie
+- ✅ SQL注入防护
+- ✅ 用户授权系统
+
+## 🛠️ 技术栈
+- **Bot**: python-telegram-bot 20.0+
+- **Client**: Telethon / Pyrogram
+- **Web**: FastAPI 0.104+
+- **Database**: MySQL 8.0+
+- **Cache**: Redis 7.0+
+- **Frontend**: Bootstrap 5 + Chart.js
+
+## 📊 使用场景
+
+**个人使用**：单Bot模式，简单快速
+**商业运营**：Bot Pool模式，高可用负载均衡
+**SaaS平台**：用户授权系统，租户隔离
+
+## 🤝 贡献
+欢迎提交Issue和Pull Request！
+
+## 📄 许可证
+MIT License
 
 ---
-
-**⭐ 如果这个项目对你有帮助，请给个Star！**
+**⚡ 立即体验专业的Telegram账号管理平台！**
