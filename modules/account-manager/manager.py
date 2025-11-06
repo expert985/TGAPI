@@ -363,6 +363,181 @@ class AccountManager:
             )
             return False, error_msg
 
+    async def update_profile_info(
+        self,
+        account_id: int,
+        first_name: Optional[str] = None,
+        last_name: Optional[str] = None,
+        about: Optional[str] = None
+    ) -> tuple[bool, str]:
+        """
+        修改账号信息（昵称和简介）
+
+        Args:
+            account_id: 账号ID
+            first_name: 名字
+            last_name: 姓氏
+            about: 个人简介
+
+        Returns:
+            (是否成功, 消息)
+        """
+        try:
+            from telethon import functions
+
+            client = await self._get_client(account_id)
+            if not client:
+                return False, "无法连接到账号"
+
+            # 更新个人资料
+            await client(functions.account.UpdateProfileRequest(
+                first_name=first_name or "",
+                last_name=last_name or "",
+                about=about or ""
+            ))
+
+            # 记录日志
+            db.log_operation(
+                account_id=account_id,
+                operation='update_profile',
+                details=f"名字: {first_name}, 姓氏: {last_name}, 简介: {about}",
+                result='success'
+            )
+
+            logger.info(f"✅ 账号信息更新成功: {account_id}")
+            return True, "账号信息更新成功"
+
+        except Exception as e:
+            error_msg = f"更新账号信息失败: {str(e)}"
+            logger.error(error_msg)
+            db.log_operation(
+                account_id=account_id,
+                operation='update_profile',
+                details="",
+                result='failed',
+                error_message=error_msg
+            )
+            return False, error_msg
+
+    async def hide_phone_number(self, account_id: int) -> tuple[bool, str]:
+        """
+        隐藏手机号
+
+        Args:
+            account_id: 账号ID
+
+        Returns:
+            (是否成功, 消息)
+        """
+        try:
+            from telethon import functions, types
+
+            client = await self._get_client(account_id)
+            if not client:
+                return False, "无法连接到账号"
+
+            # 设置手机号隐私为"禁止所有人"
+            await client(functions.account.SetPrivacyRequest(
+                key=types.InputPrivacyKeyPhoneNumber(),
+                rules=[types.InputPrivacyValueDisallowAll()]
+            ))
+
+            # 记录日志
+            db.log_operation(
+                account_id=account_id,
+                operation='hide_phone',
+                details="已设置手机号隐私",
+                result='success'
+            )
+
+            logger.info(f"✅ 手机号已隐藏: {account_id}")
+            return True, "手机号已隐藏"
+
+        except Exception as e:
+            error_msg = f"隐藏手机号失败: {str(e)}"
+            logger.error(error_msg)
+            return False, error_msg
+
+    async def check_phone_registered(self, phone: str) -> tuple[bool, str, bool]:
+        """
+        检查手机号注册状态
+
+        Args:
+            phone: 手机号
+
+        Returns:
+            (是否成功, 消息, 是否已注册)
+        """
+        try:
+            from telethon import functions
+
+            # 创建临时客户端（不需要登录）
+            from shared.config.settings import settings
+
+            if not settings.telegram.api_id or not settings.telegram.api_hash:
+                return False, "未配置API凭证", False
+
+            from telethon import TelegramClient
+            from telethon.sessions import StringSession
+
+            client = TelegramClient(
+                StringSession(),
+                settings.telegram.api_id,
+                settings.telegram.api_hash
+            )
+
+            await client.connect()
+
+            # 检查手机号
+            result = await client(functions.auth.CheckPhoneRequest(phone_number=phone))
+
+            await client.disconnect()
+
+            is_registered = result.phone_registered
+
+            logger.info(f"📱 手机号 {phone} 注册状态: {'已注册' if is_registered else '未注册'}")
+            return True, "检查完成", is_registered
+
+        except Exception as e:
+            error_msg = f"检查手机号失败: {str(e)}"
+            logger.error(error_msg)
+            return False, error_msg, False
+
+    async def terminate_other_devices(self, account_id: int) -> tuple[bool, str]:
+        """
+        踢出其他设备（防找回核心功能）
+
+        Args:
+            account_id: 账号ID
+
+        Returns:
+            (是否成功, 消息)
+        """
+        try:
+            from modules.account_manager.device_manager import device_manager
+
+            client = await self._get_client(account_id)
+            if not client:
+                return False, "无法连接到账号"
+
+            # 调用设备管理器踢出其他设备
+            success, msg = await device_manager.terminate_all_other_sessions(client)
+
+            # 记录日志
+            db.log_operation(
+                account_id=account_id,
+                operation='kick_devices',
+                details=msg,
+                result='success' if success else 'failed'
+            )
+
+            return success, msg
+
+        except Exception as e:
+            error_msg = f"踢出设备失败: {str(e)}"
+            logger.error(error_msg)
+            return False, error_msg
+
     async def batch_check_accounts(self, account_ids: List[int]) -> Dict[int, str]:
         """
         批量筛活
