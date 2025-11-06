@@ -1,0 +1,68 @@
+version: '3.8'
+
+services:
+  # API服务器
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tgbot_api
+    restart: unless-stopped
+    ports:
+      - "${SERVER_PORT:-52000}:52000"
+    volumes:
+      - ./data:/app/data
+      - ./sessions:/app/sessions
+      - ./logs:/app/logs
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - API_ID=${API_ID}
+      - API_HASH=${API_HASH}
+      - ADMIN_USER_IDS=${ADMIN_USER_IDS}
+      - DATABASE_PATH=/app/data/bot.db
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=52000
+      - API_BASE_URL=${API_BASE_URL:-http://localhost:52000}
+      - DEBUG=${DEBUG:-false}
+    networks:
+      - tgbot_network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:52000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Telegram Bot
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tgbot_bot
+    restart: unless-stopped
+    command: python -m bot.main
+    volumes:
+      - ./data:/app/data
+      - ./sessions:/app/sessions
+      - ./logs:/app/logs
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - API_ID=${API_ID}
+      - API_HASH=${API_HASH}
+      - ADMIN_USER_IDS=${ADMIN_USER_IDS}
+      - DATABASE_PATH=/app/data/bot.db
+      - API_BASE_URL=${API_BASE_URL:-http://localhost:52000}
+    networks:
+      - tgbot_network
+    depends_on:
+      api:
+        condition: service_healthy
+
+networks:
+  tgbot_network:
+    driver: bridge
+
+volumes:
+  data:
+  sessions:
+  logs:

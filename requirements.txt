@@ -1,0 +1,22 @@
+# Core dependencies
+python-telegram-bot>=20.0
+telethon>=1.30.0
+pyrogram>=2.0.0
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.0.0
+
+# Database
+sqlite3  # Built-in with Python
+
+# Utilities
+python-dotenv>=1.0.0
+cryptography>=41.0.0
+aiofiles>=23.0.0
+httpx>=0.25.0
+
+# Optional: TData conversion (需要时安装)
+# opentele>=1.15.0
+
+# Logging and monitoring
+colorlog>=6.7.0
