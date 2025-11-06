@@ -9,6 +9,8 @@
 - **用户授权管理** - 灵活租户系统（1月/3月/6月/1年/永久）
 - **会话保持** - 同用户固定使用同一bot
 - **健康监控** - 30秒心跳检查，自动故障隔离
+- **日志管理** - 每日自动切割，30天自动清理
+- **进程管理** - 支持Docker/PM2/手动三种部署方式
 
 ### 📱 TGAPI接码系统
 - **Session转API** - 将Session文件转为Web接码链接
@@ -30,9 +32,14 @@
 
 ### 1. 环境要求
 ```bash
+# 必需
 Python 3.9+
 MySQL 8.0+
-Redis 7.0+ (可选，Bot Pool模式需要)
+
+# 可选
+Redis 7.0+ (Bot Pool模式需要)
+Node.js 14+ + PM2 (使用PM2进程管理时需要)
+Docker + Docker Compose (使用Docker部署时需要)
 ```
 
 ### 2. 安装
@@ -59,7 +66,67 @@ ADMIN_PASSWORD=your_password
 
 ### 4. 启动
 
-**单Bot模式**（默认）：
+#### 🎯 方式一：交互式菜单（推荐）
+```bash
+./start.sh
+```
+进入交互式菜单，选择对应编号即可：
+```
+【Docker模式】
+  1)  🔧 环境初始化检测
+  2)  ▶️  启动Docker容器
+  3)  ⏸️  停止Docker容器
+  ...
+
+【PM2模式】
+  11) ▶️  使用PM2启动服务
+  12) ⏸️  停止PM2服务
+  ...
+
+【Bot Pool管理】
+  21) 📊 查看Bot Pool状态
+  22) ➕ 添加Bot到池中
+  23) 🔄 重启指定Bot
+```
+
+#### 🐳 方式二：Docker模式
+```bash
+# 初始化环境
+./start.sh init
+
+# 启动所有服务（Bot + API + Redis + MySQL）
+./start.sh start
+
+# 查看日志
+./start.sh logs
+
+# 停止服务
+./start.sh stop
+```
+
+#### ⚡ 方式三：PM2模式（生产推荐）
+```bash
+# 安装PM2
+npm install -g pm2
+
+# 初始化环境
+./start.sh init
+
+# 启动服务
+./start.sh pm2 start
+
+# 查看状态
+./start.sh pm2 status
+
+# 实时监控
+pm2 monit
+
+# 查看日志
+./start.sh pm2 logs
+```
+
+#### 🔧 方式四：手动启动
+**单Bot模式**：
 ```bash
 # 启动Bot
 python -m bot.main
@@ -68,7 +135,7 @@ python -m bot.main
 python -m api.server
 ```
 
-**Bot Pool模式**（高可用）：
+**Bot Pool模式**：
 ```bash
 # 1. 启动Redis
 docker run -d -p 6379:6379 redis
