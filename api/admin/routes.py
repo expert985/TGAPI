@@ -417,29 +417,222 @@ async def activate_user(request: Request, telegram_id: int, notes: str = Form(No
 # ==================== 账号管理 ====================
 
 @admin_router.get("/accounts", response_class=HTMLResponse)
-async def account_list(request: Request, status_filter: Optional[str] = None):
-    """账号列表"""
+async def account_list(
+    request: Request,
+    status_filter: Optional[str] = None,
+    tenant_id: Optional[int] = None,
+    search: Optional[str] = None,
+    page: int = 1,
+    per_page: int = 50
+):
+    """账号列表（增强版 - 支持高级搜索）"""
     user = AdminAuth.get_current_user(request)
     if not user:
         return RedirectResponse(url="/admin/login", status_code=status.HTTP_302_FOUND)
 
-    # 获取账号列表
+    # 构建查询条件
+    conditions = []
+    params = []
+
     if status_filter:
-        accounts = db.fetchall(
-            "SELECT * FROM accounts WHERE status = ? ORDER BY created_at DESC LIMIT 100",
-            (status_filter,)
-        )
-    else:
-        accounts = db.fetchall(
-            "SELECT * FROM accounts ORDER BY created_at DESC LIMIT 100"
-        )
+        conditions.append("status = ?")
+        params.append(status_filter)
+
+    if tenant_id:
+        conditions.append("tenant_id = ?")
+        params.append(tenant_id)
+
+    if search:
+        conditions.append("(phone LIKE ? OR username LIKE ?)")
+        params.extend([f"%{search}%", f"%{search}%"])
+
+    # 组装SQL
+    where_clause = " AND ".join(conditions) if conditions else "1=1"
+    offset = (page - 1) * per_page
+
+    # 获取总数
+    count_sql = f"SELECT COUNT(*) as total FROM accounts WHERE {where_clause}"
+    total = db.fetchone(count_sql, tuple(params))["total"] if params else \
+            db.fetchone("SELECT COUNT(*) as total FROM accounts")["total"]
+
+    # 获取账号列表
+    query = f"""
+        SELECT * FROM accounts
+        WHERE {where_clause}
+        ORDER BY created_at DESC
+        LIMIT ? OFFSET ?
+    """
+    params.extend([per_page, offset])
+    accounts = db.fetchall(query, tuple(params)) if params else \
+               db.fetchall(f"SELECT * FROM accounts ORDER BY created_at DESC LIMIT ? OFFSET ?", (per_page, offset))
+
+    # 获取所有租户（用于筛选下拉框）
+    tenants = db.fetchall("SELECT id, tenant_name, tenant_code FROM tenants ORDER BY tenant_name")
+
+    # 计算总页数
+    total_pages = (total + per_page - 1) // per_page
 
     return templates.TemplateResponse("admin/accounts.html", {
         "request": request,
         "user": user,
         "accounts": [dict(a) for a in accounts] if accounts else [],
-        "status_filter": status_filter
+        "tenants": [dict(t) for t in tenants] if tenants else [],
+        "status_filter": status_filter,
+        "tenant_id": tenant_id,
+        "search": search,
+        "page": page,
+        "per_page": per_page,
+        "total": total,
+        "total_pages": total_pages
     })
+
+
+@admin_router.get("/accounts/{account_id}", response_class=HTMLResponse)
+async def account_detail(request: Request, account_id: int):
+    """账号详情页"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/admin/login", status_code=status.HTTP_302_FOUND)
+
+    # 获取账号信息
+    account = db.fetchone("SELECT * FROM accounts WHERE id = ?", (account_id,))
+    if not account:
+        return templates.TemplateResponse("admin/error.html", {
+            "request": request,
+            "user": user,
+            "error": "账号不存在"
+        })
+
+    account_dict = dict(account)
+
+    # 解析JSON数据
+    import json
+    if account_dict.get('session_data'):
+        try:
+            account_dict['session_data_parsed'] = json.loads(account_dict['session_data'])
+        except:
+            account_dict['session_data_parsed'] = {}
+
+    # 获取租户信息
+    tenant = None
+    if account_dict.get('tenant_id'):
+        tenant = db.fetchone("SELECT * FROM tenants WHERE id = ?", (account_dict['tenant_id'],))
+        if tenant:
+            account_dict['tenant'] = dict(tenant)
+
+    # 获取相关的TGAPI会话
+    tgapi_sessions = db.fetchall(
+        "SELECT * FROM tgapi_sessions WHERE account_id = ? ORDER BY created_at DESC",
+        (account_id,)
+    )
+
+    # 获取操作日志
+    operation_logs = db.fetchall(
+        """SELECT * FROM operation_logs
+           WHERE details LIKE ?
+           ORDER BY created_at DESC LIMIT 20""",
+        (f"%account_id:{account_id}%",)
+    )
+
+    return templates.TemplateResponse("admin/account_detail.html", {
+        "request": request,
+        "user": user,
+        "account": account_dict,
+        "tgapi_sessions": [dict(s) for s in tgapi_sessions] if tgapi_sessions else [],
+        "operation_logs": [dict(l) for l in operation_logs] if operation_logs else []
+    })
+
+
+@admin_router.post("/accounts/bulk-delete")
+async def bulk_delete_accounts(request: Request, account_ids: str = Form(...)):
+    """批量删除账号"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return JSONResponse({"success": False, "message": "未认证"}, status_code=401)
+
+    try:
+        ids = [int(id.strip()) for id in account_ids.split(",") if id.strip()]
+
+        for account_id in ids:
+            db.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
+
+        logger.info(f"✅ 管理员 {user} 批量删除账号: {len(ids)}个")
+        return JSONResponse({"success": True, "message": f"成功删除 {len(ids)} 个账号"})
+
+    except Exception as e:
+        logger.error(f"批量删除账号失败: {str(e)}")
+        return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
+
+@admin_router.get("/accounts/export")
+async def export_accounts(
+    request: Request,
+    status_filter: Optional[str] = None,
+    tenant_id: Optional[int] = None
+):
+    """导出账号（CSV格式）"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/admin/login", status_code=status.HTTP_302_FOUND)
+
+    try:
+        # 构建查询条件
+        conditions = []
+        params = []
+
+        if status_filter:
+            conditions.append("status = ?")
+            params.append(status_filter)
+
+        if tenant_id:
+            conditions.append("tenant_id = ?")
+            params.append(tenant_id)
+
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+        # 获取账号数据
+        query = f"SELECT * FROM accounts WHERE {where_clause} ORDER BY created_at DESC"
+        accounts = db.fetchall(query, tuple(params)) if params else db.fetchall(query)
+
+        # 生成CSV
+        import csv
+        import io
+        from fastapi.responses import StreamingResponse
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+
+        # 写入表头
+        writer.writerow(['ID', '手机号', '用户名', 'Session类型', '状态', '创建时间', '最后检查'])
+
+        # 写入数据
+        for account in accounts:
+            writer.writerow([
+                account['id'],
+                account['phone'],
+                account.get('username', ''),
+                account['session_type'],
+                account['status'],
+                account['created_at'],
+                account.get('last_check', '')
+            ])
+
+        output.seek(0)
+        logger.info(f"✅ 管理员 {user} 导出账号: {len(accounts)}个")
+
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=accounts_export.csv"}
+        )
+
+    except Exception as e:
+        logger.error(f"导出账号失败: {str(e)}")
+        return templates.TemplateResponse("admin/error.html", {
+            "request": request,
+            "user": user,
+            "error": f"导出失败: {str(e)}"
+        })
 
 
 # ==================== TGAPI会话管理 ====================
