@@ -414,6 +414,92 @@ async def activate_user(request: Request, telegram_id: int, notes: str = Form(No
         return JSONResponse({"success": False, "message": str(e)}, status_code=500)
 
 
+@admin_router.get("/users/{telegram_id}/detail", response_class=HTMLResponse)
+async def tenant_detail(request: Request, telegram_id: int):
+    """租户详情页（显示该租户的所有资源）"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/admin/login", status_code=status.HTTP_302_FOUND)
+
+    # 获取租户基本信息
+    tenant = db.fetchone("SELECT * FROM authorized_users WHERE telegram_id = ?", (telegram_id,))
+    if not tenant:
+        return templates.TemplateResponse("admin/error.html", {
+            "request": request,
+            "user": user,
+            "error_title": "租户不存在",
+            "error_message": f"找不到Telegram ID为 {telegram_id} 的租户"
+        })
+
+    tenant_dict = dict(tenant)
+
+    # 获取租户的所有账号
+    accounts = db.fetchall(
+        """SELECT * FROM accounts
+           WHERE tenant_id = ?
+           ORDER BY created_at DESC""",
+        (tenant_dict['id'],)
+    )
+
+    # 统计账号状态
+    account_stats = {
+        'total': len(accounts),
+        'active': sum(1 for a in accounts if a['status'] == 'active'),
+        'banned': sum(1 for a in accounts if a['status'] == 'banned'),
+        'expired': sum(1 for a in accounts if a['status'] == 'expired')
+    }
+
+    # 获取租户的所有TGAPI会话
+    tgapi_sessions = db.fetchall(
+        """SELECT ts.*, a.phone, a.username
+           FROM tgapi_sessions ts
+           LEFT JOIN accounts a ON ts.account_id = a.id
+           WHERE a.tenant_id = ?
+           ORDER BY ts.created_at DESC""",
+        (tenant_dict['id'],)
+    )
+
+    # 统计TGAPI会话状态
+    session_stats = {
+        'total': len(tgapi_sessions),
+        'active': sum(1 for s in tgapi_sessions if s['status'] == 'active'),
+        'used': sum(1 for s in tgapi_sessions if s['status'] == 'used'),
+        'expired': sum(1 for s in tgapi_sessions if s['status'] == 'expired')
+    }
+
+    # 获取授权日志
+    auth_logs = db.fetchall(
+        """SELECT * FROM authorization_logs
+           WHERE telegram_id = ?
+           ORDER BY created_at DESC
+           LIMIT 20""",
+        (telegram_id,)
+    )
+
+    # 计算配额使用率
+    max_accounts = tenant_dict.get('max_accounts', 10)
+    max_sessions = tenant_dict.get('max_tgapi_sessions', 5)
+
+    usage_stats = {
+        'accounts_usage': f"{account_stats['total']}/{max_accounts}",
+        'accounts_percent': int((account_stats['total'] / max_accounts * 100)) if max_accounts > 0 else 0,
+        'sessions_usage': f"{session_stats['total']}/{max_sessions}",
+        'sessions_percent': int((session_stats['total'] / max_sessions * 100)) if max_sessions > 0 else 0
+    }
+
+    return templates.TemplateResponse("admin/tenant_detail.html", {
+        "request": request,
+        "user": user,
+        "tenant": tenant_dict,
+        "accounts": [dict(a) for a in accounts] if accounts else [],
+        "account_stats": account_stats,
+        "tgapi_sessions": [dict(s) for s in tgapi_sessions] if tgapi_sessions else [],
+        "session_stats": session_stats,
+        "auth_logs": [dict(l) for l in auth_logs] if auth_logs else [],
+        "usage_stats": usage_stats
+    })
+
+
 # ==================== 账号管理 ====================
 
 @admin_router.get("/accounts", response_class=HTMLResponse)

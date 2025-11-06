@@ -105,6 +105,9 @@
                         <td>{{ auth_user.authorization_date }}</td>
                         <td>{{ auth_user.last_active or '从未' }}</td>
                         <td>
+                            <a href="/admin/users/{{ auth_user.telegram_id }}/detail" class="btn btn-sm btn-outline-primary btn-action">
+                                <i class="bi bi-eye"></i> 详情
+                            </a>
                             {% if auth_user.status == 'active' %}
                             <button class="btn btn-sm btn-outline-info btn-action" onclick="renewUser({{ auth_user.telegram_id }})">
                                 <i class="bi bi-arrow-clockwise"></i> 续期
