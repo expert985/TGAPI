@@ -1,8 +1,10 @@
 """
 Telegram Bot 主程序 - 综合功能管理机器人
+支持多Bot负载均衡
 """
 import asyncio
 import os
+import redis
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -23,6 +25,9 @@ from modules.tgapi.core import tgapi_manager
 from modules.account_manager.manager import account_manager
 from modules.converter.converter import conversion_pipeline
 from modules.auto_gen.autogen import autogen_tool
+
+# Bot Pool支持
+from bot.pool import BotPoolManager, LoadBalanceStrategy
 
 
 # 授权检查装饰器
@@ -328,36 +333,11 @@ class TGBotManager:
             # TODO: 实现文件转换逻辑
 
 
-async def main():
-    """主函数"""
-    # 加载环境变量
-    load_env_file()
-
-    # 验证配置
-    is_valid, errors = settings.validate()
-    if not is_valid:
-        logger.error("配置验证失败:")
-        for error in errors:
-            logger.error(f"  {error}")
-        return
-
-    # 初始化数据库
-    logger.info("正在初始化数据库...")
-    db.initialize()
-
-    # 执行租户schema（如果尚未执行）
-    try:
-        with open("shared/database/tenant_schema.sql", 'r', encoding='utf-8') as f:
-            schema_sql = f.read()
-            db.conn.executescript(schema_sql)
-            db.conn.commit()
-    except Exception as e:
-        logger.warning(f"执行租户schema失败（可能已存在）: {str(e)}")
-
-    # 创建应用
-    logger.info("正在启动Telegram Bot...")
-    application = Application.builder().token(settings.telegram.bot_token).build()
-
+async def setup_handlers(application: Application):
+    """
+    为Application设置handlers
+    此函数会被BotPoolManager用于初始化每个bot实例
+    """
     # 创建Bot管理器
     bot_manager = TGBotManager()
 
@@ -373,9 +353,97 @@ async def main():
     # 注册消息处理器
     application.add_handler(MessageHandler(filters.ALL, bot_manager.handle_message))
 
-    # 启动Bot
-    logger.info("✅ Bot启动成功！")
-    await application.run_polling()
+    logger.debug("✅ Handlers设置完成")
+
+
+async def main():
+    """主函数 - 支持Bot Pool负载均衡"""
+    # 加载环境变量
+    load_env_file()
+
+    # 验证配置
+    is_valid, errors = settings.validate()
+    if not is_valid:
+        logger.error("配置验证失败:")
+        for error in errors:
+            logger.error(f"  {error}")
+        return
+
+    # 初始化数据库
+    logger.info("正在初始化数据库...")
+    db.initialize()
+
+    # 执行bot_pool_schema（如果尚未执行）
+    try:
+        # 执行Bot Pool schema
+        with open("shared/database/bot_pool_schema.sql", 'r', encoding='utf-8') as f:
+            schema_sql = f.read()
+            # 移除DELIMITER语句（Python DB-API不支持）
+            schema_sql = schema_sql.replace('DELIMITER //', '').replace('DELIMITER ;', '')
+            for statement in schema_sql.split(';'):
+                if statement.strip():
+                    db.execute(statement)
+        logger.info("✅ Bot Pool schema初始化成功")
+    except Exception as e:
+        logger.warning(f"执行Bot Pool schema失败（可能已存在）: {str(e)}")
+
+    # 执行授权用户schema（如果尚未执行）
+    try:
+        with open("shared/database/authorized_users_schema.sql", 'r', encoding='utf-8') as f:
+            schema_sql = f.read()
+            db.conn.executescript(schema_sql)
+            db.conn.commit()
+        logger.info("✅ 授权用户schema初始化成功")
+    except Exception as e:
+        logger.warning(f"执行授权用户schema失败（可能已存在）: {str(e)}")
+
+    # 检查是否启用Bot Pool模式
+    use_bot_pool = os.getenv("ENABLE_BOT_POOL", "false").lower() == "true"
+
+    if use_bot_pool:
+        logger.info("🚀 启动模式: Bot Pool (负载均衡)")
+
+        # 初始化Redis连接
+        redis_client = redis.Redis(
+            host=os.getenv("REDIS_HOST", "localhost"),
+            port=int(os.getenv("REDIS_PORT", 6379)),
+            db=int(os.getenv("REDIS_DB", 0)),
+            decode_responses=True
+        )
+
+        # 创建BotPoolManager
+        pool_manager = BotPoolManager(
+            redis_client=redis_client,
+            handlers_setup_func=setup_handlers,
+            lb_strategy=LoadBalanceStrategy.LEAST_CONNECTIONS
+        )
+
+        # 初始化Bot池（从数据库加载所有bot配置）
+        await pool_manager.initialize()
+
+        # 启动Bot池
+        await pool_manager.start()
+
+        # 保持运行
+        logger.info("✅ Bot Pool运行中...")
+        try:
+            await asyncio.Event().wait()
+        except KeyboardInterrupt:
+            logger.info("收到停止信号，正在关闭...")
+            await pool_manager.stop()
+
+    else:
+        logger.info("🚀 启动模式: 单Bot (传统)")
+
+        # 传统单Bot模式
+        application = Application.builder().token(settings.telegram.bot_token).build()
+
+        # 设置handlers
+        await setup_handlers(application)
+
+        # 启动Bot
+        logger.info("✅ Bot启动成功！")
+        await application.run_polling()
 
 
 if __name__ == "__main__":

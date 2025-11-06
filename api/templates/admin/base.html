@@ -197,6 +197,12 @@
                     </a>
                 </li>
                 <li class="nav-item">
+                    <a class="nav-link {% if '/bot-pool' in request.url.path %}active{% endif %}" href="/admin/bot-pool">
+                        <i class="bi bi-hdd-rack"></i>
+                        <span>Bot Pool</span>
+                    </a>
+                </li>
+                <li class="nav-item">
                     <a class="nav-link {% if '/proxies' in request.url.path %}active{% endif %}" href="/admin/proxies">
                         <i class="bi bi-hdd-network"></i>
                         <span>代理管理</span>

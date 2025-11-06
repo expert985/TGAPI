@@ -1136,6 +1136,213 @@ async def system_settings(request: Request):
     })
 
 
+# ==================== Bot Pool 管理 ====================
+
+@admin_router.get("/bot-pool", response_class=HTMLResponse)
+async def bot_pool_management(request: Request):
+    """Bot Pool管理页面"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/admin/login", status_code=status.HTTP_302_FOUND)
+
+    try:
+        # 获取所有Bot配置
+        bots = db.fetchall("SELECT * FROM bot_configs ORDER BY priority DESC, id ASC")
+
+        # 获取每个Bot的实时统计
+        bot_list = []
+        for bot in bots:
+            stats = db.fetchone("SELECT * FROM bot_stats WHERE bot_id = ?", (bot['id'],))
+            bot_dict = dict(bot)
+            bot_dict['stats'] = dict(stats) if stats else None
+            bot_list.append(bot_dict)
+
+        # 获取总体统计
+        total_active_users = db.fetchone(
+            "SELECT SUM(active_users) as total FROM bot_stats"
+        )['total'] or 0
+
+        total_capacity = db.fetchone(
+            "SELECT SUM(max_load) as total FROM bot_configs WHERE status = 'active'"
+        )['total'] or 0
+
+        # 获取最近事件
+        recent_events = db.fetchall(
+            """SELECT be.*, bc.bot_username
+               FROM bot_events be
+               LEFT JOIN bot_configs bc ON be.bot_id = bc.id
+               ORDER BY be.created_at DESC
+               LIMIT 50"""
+        )
+
+        return templates.TemplateResponse("admin/bot_pool.html", {
+            "request": request,
+            "user": user,
+            "bots": bot_list,
+            "total_bots": len(bots),
+            "active_bots": sum(1 for b in bots if b['status'] == 'active'),
+            "total_active_users": total_active_users,
+            "total_capacity": total_capacity,
+            "utilization_rate": round((total_active_users / total_capacity * 100), 2) if total_capacity > 0 else 0,
+            "recent_events": [dict(e) for e in recent_events] if recent_events else []
+        })
+
+    except Exception as e:
+        logger.error(f"获取Bot Pool信息失败: {e}")
+        return templates.TemplateResponse("admin/error.html", {
+            "request": request,
+            "user": user,
+            "error_title": "加载失败",
+            "error_message": str(e)
+        })
+
+
+@admin_router.post("/bot-pool/add")
+async def add_bot_to_pool(
+    request: Request,
+    bot_token: str = Form(...),
+    bot_username: str = Form(...),
+    bot_name: str = Form(...),
+    max_load: int = Form(100),
+    priority: int = Form(1),
+    description: str = Form(None)
+):
+    """添加Bot到池中"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return JSONResponse({"success": False, "message": "未认证"}, status_code=401)
+
+    try:
+        # 插入Bot配置
+        db.execute(
+            """INSERT INTO bot_configs
+               (bot_token, bot_username, bot_name, max_load, priority, description, status)
+               VALUES (?, ?, ?, ?, ?, ?, 'active')""",
+            (bot_token, bot_username, bot_name, max_load, priority, description)
+        )
+
+        bot_id = db.fetchone("SELECT LAST_INSERT_ID() as id")['id']
+
+        logger.info(f"✅ 管理员 {user} 添加Bot: {bot_username} (ID: {bot_id})")
+
+        return JSONResponse({
+            "success": True,
+            "message": f"Bot {bot_username} 添加成功！",
+            "bot_id": bot_id
+        })
+
+    except Exception as e:
+        logger.error(f"添加Bot失败: {e}")
+        return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
+
+@admin_router.post("/bot-pool/{bot_id}/toggle-status")
+async def toggle_bot_status(request: Request, bot_id: int):
+    """切换Bot状态（active/inactive）"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return JSONResponse({"success": False, "message": "未认证"}, status_code=401)
+
+    try:
+        # 获取当前状态
+        bot = db.fetchone("SELECT status FROM bot_configs WHERE id = ?", (bot_id,))
+        if not bot:
+            return JSONResponse({"success": False, "message": "Bot不存在"}, status_code=404)
+
+        # 切换状态
+        new_status = 'inactive' if bot['status'] == 'active' else 'active'
+
+        db.execute(
+            "UPDATE bot_configs SET status = ?, updated_at = ? WHERE id = ?",
+            (new_status, datetime.now(), bot_id)
+        )
+
+        # 记录事件
+        db.execute(
+            """INSERT INTO bot_events (bot_id, event_type, event_level, message)
+               VALUES (?, ?, ?, ?)""",
+            (bot_id, 'status_change', 'info', f'管理员 {user} 将状态改为 {new_status}')
+        )
+
+        logger.info(f"✅ 管理员 {user} 切换Bot状态: bot_id={bot_id} -> {new_status}")
+
+        return JSONResponse({
+            "success": True,
+            "message": f"Bot状态已切换为: {new_status}",
+            "new_status": new_status
+        })
+
+    except Exception as e:
+        logger.error(f"切换Bot状态失败: {e}")
+        return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
+
+@admin_router.post("/bot-pool/{bot_id}/delete")
+async def delete_bot_from_pool(request: Request, bot_id: int):
+    """从池中删除Bot"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return JSONResponse({"success": False, "message": "未认证"}, status_code=401)
+
+    try:
+        # 检查Bot是否存在
+        bot = db.fetchone("SELECT bot_username FROM bot_configs WHERE id = ?", (bot_id,))
+        if not bot:
+            return JSONResponse({"success": False, "message": "Bot不存在"}, status_code=404)
+
+        # 删除Bot（级联删除相关stats和events）
+        db.execute("DELETE FROM bot_configs WHERE id = ?", (bot_id,))
+
+        logger.info(f"✅ 管理员 {user} 删除Bot: {bot['bot_username']} (ID: {bot_id})")
+
+        return JSONResponse({
+            "success": True,
+            "message": f"Bot {bot['bot_username']} 已删除"
+        })
+
+    except Exception as e:
+        logger.error(f"删除Bot失败: {e}")
+        return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
+
+@admin_router.get("/bot-pool/stats")
+async def get_bot_pool_stats(request: Request):
+    """获取Bot Pool实时统计（API）"""
+    user = AdminAuth.get_current_user(request)
+    if not user:
+        return JSONResponse({"success": False, "message": "未认证"}, status_code=401)
+
+    try:
+        # 获取所有Bot及其统计
+        bots = db.fetchall(
+            """SELECT bc.*, bs.*
+               FROM bot_configs bc
+               LEFT JOIN bot_stats bs ON bc.id = bs.bot_id
+               ORDER BY bc.priority DESC"""
+        )
+
+        bot_stats = []
+        for bot in bots:
+            bot_stats.append({
+                'bot_id': bot['id'],
+                'bot_username': bot['bot_username'],
+                'status': bot['status'],
+                'active_users': bot.get('active_users', 0),
+                'total_messages': bot.get('total_messages', 0),
+                'load_percentage': round((bot.get('active_users', 0) / bot['max_load'] * 100), 2) if bot['max_load'] > 0 else 0,
+                'last_heartbeat': bot.get('last_heartbeat')
+            })
+
+        return JSONResponse({
+            "success": True,
+            "data": bot_stats
+        })
+
+    except Exception as e:
+        logger.error(f"获取Bot Pool统计失败: {e}")
+        return JSONResponse({"success": False, "message": str(e)}, status_code=500)
+
+
 # ==================== API接口（JSON） ====================
 
 @admin_router.get("/api/stats")

@@ -1,0 +1,357 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Bot Pool管理{% endblock %}
+{% block page_title %}Bot Pool管理{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div class="d-flex justify-content-between align-items-center">
+        <div>
+            <h1 class="page-title">
+                <i class="bi bi-hdd-rack"></i> Bot Pool 负载均衡
+            </h1>
+            <p class="text-muted">多机器人负载均衡管理 - 高可用架构</p>
+        </div>
+        <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addBotModal">
+            <i class="bi bi-plus-circle"></i> 添加Bot
+        </button>
+    </div>
+</div>
+
+<!-- 总体统计 -->
+<div class="row g-4 mb-4">
+    <div class="col-md-3">
+        <div class="card stat-card border-0 shadow-sm">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="text-muted mb-2">总Bot数</h6>
+                        <h2 class="mb-0">{{ total_bots }}</h2>
+                    </div>
+                    <div class="icon text-primary">
+                        <i class="bi bi-hdd-rack-fill"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card border-0 shadow-sm">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="text-muted mb-2">运行中</h6>
+                        <h2 class="mb-0 text-success">{{ active_bots }}</h2>
+                    </div>
+                    <div class="icon text-success">
+                        <i class="bi bi-check-circle-fill"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card border-0 shadow-sm">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="text-muted mb-2">活跃用户</h6>
+                        <h2 class="mb-0">{{ total_active_users }}</h2>
+                    </div>
+                    <div class="icon text-info">
+                        <i class="bi bi-people-fill"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card border-0 shadow-sm">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="text-muted mb-2">负载率</h6>
+                        <h2 class="mb-0">{{ utilization_rate }}%</h2>
+                    </div>
+                    <div class="icon text-warning">
+                        <i class="bi bi-speedometer"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Bot列表 -->
+<div class="card border-0 shadow-sm mb-4">
+    <div class="card-header bg-white">
+        <h5 class="mb-0"><i class="bi bi-list-ul"></i> Bot实例列表</h5>
+    </div>
+    <div class="card-body p-0">
+        {% if bots %}
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Bot用户名</th>
+                        <th>显示名称</th>
+                        <th>状态</th>
+                        <th>活跃用户</th>
+                        <th>负载率</th>
+                        <th>优先级</th>
+                        <th>最后心跳</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for bot in bots %}
+                    <tr>
+                        <td>{{ bot.id }}</td>
+                        <td><code>@{{ bot.bot_username }}</code></td>
+                        <td>{{ bot.bot_name }}</td>
+                        <td>
+                            {% if bot.status == 'active' %}
+                                <span class="status-badge bg-success">运行中</span>
+                            {% elif bot.status == 'inactive' %}
+                                <span class="status-badge bg-secondary">已停止</span>
+                            {% elif bot.status == 'error' %}
+                                <span class="status-badge bg-danger">错误</span>
+                            {% elif bot.status == 'maintenance' %}
+                                <span class="status-badge bg-warning">维护中</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if bot.stats %}
+                                {{ bot.stats.active_users }} / {{ bot.max_load }}
+                            {% else %}
+                                0 / {{ bot.max_load }}
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if bot.stats %}
+                                {% set load_pct = (bot.stats.active_users / bot.max_load * 100)|round(0) if bot.max_load > 0 else 0 %}
+                                <div class="progress" style="height: 20px;">
+                                    <div class="progress-bar {% if load_pct >= 90 %}bg-danger{% elif load_pct >= 70 %}bg-warning{% else %}bg-success{% endif %}"
+                                         role="progressbar"
+                                         style="width: {{ load_pct }}%">
+                                        {{ load_pct }}%
+                                    </div>
+                                </div>
+                            {% else %}
+                                <span class="text-muted">-</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <span class="badge bg-info">{{ bot.priority }}</span>
+                        </td>
+                        <td>
+                            {% if bot.stats and bot.stats.last_heartbeat %}
+                                {{ bot.stats.last_heartbeat }}
+                            {% else %}
+                                <span class="text-muted">从未</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-primary btn-action" onclick="toggleBotStatus({{ bot.id }})">
+                                <i class="bi bi-power"></i>
+                            </button>
+                            <button class="btn btn-sm btn-outline-danger btn-action" onclick="deleteBot({{ bot.id }}, '{{ bot.bot_username }}')">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="text-center py-5">
+            <i class="bi bi-inbox" style="font-size: 4rem; color: #ccc;"></i>
+            <p class="text-muted mt-3 mb-3">Bot Pool为空</p>
+            <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addBotModal">
+                <i class="bi bi-plus-circle"></i> 添加第一个Bot
+            </button>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- 最近事件 -->
+<div class="card border-0 shadow-sm">
+    <div class="card-header bg-white">
+        <h5 class="mb-0"><i class="bi bi-clock-history"></i> 最近事件 (50条)</h5>
+    </div>
+    <div class="card-body p-0">
+        {% if recent_events %}
+        <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
+            <table class="table table-sm table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>时间</th>
+                        <th>Bot</th>
+                        <th>事件类型</th>
+                        <th>级别</th>
+                        <th>消息</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for event in recent_events %}
+                    <tr>
+                        <td>{{ event.created_at }}</td>
+                        <td>{{ event.bot_username or '-' }}</td>
+                        <td><span class="badge bg-secondary">{{ event.event_type }}</span></td>
+                        <td>
+                            {% if event.event_level == 'critical' %}
+                                <span class="badge bg-danger">严重</span>
+                            {% elif event.event_level == 'error' %}
+                                <span class="badge bg-danger">错误</span>
+                            {% elif event.event_level == 'warning' %}
+                                <span class="badge bg-warning">警告</span>
+                            {% else %}
+                                <span class="badge bg-info">信息</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ event.message }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="text-center py-4">
+            <p class="text-muted mb-0">暂无事件记录</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- 添加Bot模态框 -->
+<div class="modal fade" id="addBotModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">添加Bot到Pool</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="addBotForm" onsubmit="addBot(event)">
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Bot Token *</label>
+                        <input type="text" class="form-control" name="bot_token" required
+                               placeholder="123456:ABC-DEF1234...">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Bot用户名 *</label>
+                        <input type="text" class="form-control" name="bot_username" required
+                               placeholder="my_bot">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">显示名称 *</label>
+                        <input type="text" class="form-control" name="bot_name" required
+                               placeholder="我的Bot">
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">最大负载</label>
+                            <input type="number" class="form-control" name="max_load" value="100" min="1">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">优先级 (1-10)</label>
+                            <input type="number" class="form-control" name="priority" value="1" min="1" max="10">
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">备注</label>
+                        <textarea class="form-control" name="description" rows="2"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="submit" class="btn btn-primary">添加</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// 添加Bot
+function addBot(event) {
+    event.preventDefault();
+    const form = event.target;
+    const formData = new FormData(form);
+
+    fetch('/admin/bot-pool/add', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert('✅ ' + data.message);
+            location.reload();
+        } else {
+            alert('❌ 添加失败: ' + data.message);
+        }
+    })
+    .catch(error => {
+        alert('❌ 添加失败: ' + error);
+    });
+}
+
+// 切换Bot状态
+function toggleBotStatus(botId) {
+    if (!confirm('确定要切换Bot状态吗？')) {
+        return;
+    }
+
+    fetch(`/admin/bot-pool/${botId}/toggle-status`, {
+        method: 'POST'
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert('✅ ' + data.message);
+            location.reload();
+        } else {
+            alert('❌ 操作失败: ' + data.message);
+        }
+    })
+    .catch(error => {
+        alert('❌ 操作失败: ' + error);
+    });
+}
+
+// 删除Bot
+function deleteBot(botId, botUsername) {
+    if (!confirm(`确定要删除Bot @${botUsername} 吗？\n\n此操作不可撤销！`)) {
+        return;
+    }
+
+    fetch(`/admin/bot-pool/${botId}/delete`, {
+        method: 'POST'
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert('✅ ' + data.message);
+            location.reload();
+        } else {
+            alert('❌ 删除失败: ' + data.message);
+        }
+    })
+    .catch(error => {
+        alert('❌ 删除失败: ' + error);
+    });
+}
+
+// 自动刷新统计（每30秒）
+setInterval(function() {
+    location.reload();
+}, 30000);
+</script>
+{% endblock %}
