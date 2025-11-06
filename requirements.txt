@@ -6,8 +6,18 @@ fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
 pydantic>=2.0.0
 
-# Database
+# Database - SQLite (默认，开发环境)
 # sqlite3  # Built-in with Python
+
+# Database - MySQL 8.0+ (生产环境推荐)
+pymysql>=1.1.0
+aiomysql>=0.2.0
+sqlalchemy>=2.0.0
+alembic>=1.12.0
+
+# Cache - Redis 7.0+
+redis>=5.0.0
+aioredis>=2.0.0
 
 # Utilities
 python-dotenv>=1.0.0
@@ -23,5 +33,11 @@ aiohttp>=3.9.0
 colorlog>=6.7.0
 
 # Additional utilities
-qrcode>=7.4.2  # 用于二维码生成（扫码登录）
-pillow>=10.0.0  # 图像处理（二维码显示）
+qrcode>=7.4.2  # 二维码生成（扫码登录）
+pillow>=10.0.0  # 图像处理
+
+# 定时任务
+apscheduler>=3.10.0
+
+# 数据库连接池
+DBUtils>=3.0.0
