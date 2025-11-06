@@ -1,0 +1,297 @@
+{% extends "admin/base.html" %}
+
+{% block title %}账号详情 - {{ account.phone }}{% endblock %}
+{% block page_title %}账号详情{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <div>
+            <a href="/admin/accounts" class="btn btn-outline-secondary btn-sm mb-2">
+                <i class="bi bi-arrow-left"></i> 返回列表
+            </a>
+            <h1 class="page-title mb-0">
+                <i class="bi bi-person-badge"></i> 账号详情
+            </h1>
+        </div>
+        <div>
+            <button class="btn btn-outline-primary me-2">
+                <i class="bi bi-arrow-clockwise"></i> 检查状态
+            </button>
+            <button class="btn btn-outline-danger" onclick="deleteAccount({{ account.id }})">
+                <i class="bi bi-trash"></i> 删除账号
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- 基本信息 -->
+<div class="row">
+    <div class="col-lg-6 mb-4">
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white">
+                <h5 class="mb-0"><i class="bi bi-info-circle"></i> 基本信息</h5>
+            </div>
+            <div class="card-body">
+                <table class="table table-borderless mb-0">
+                    <tr>
+                        <th width="120">账号ID:</th>
+                        <td><code>{{ account.id }}</code></td>
+                    </tr>
+                    <tr>
+                        <th>手机号:</th>
+                        <td><code class="fs-5">{{ account.phone }}</code></td>
+                    </tr>
+                    <tr>
+                        <th>用户名:</th>
+                        <td>{{ account.username or '-' }}</td>
+                    </tr>
+                    <tr>
+                        <th>Session类型:</th>
+                        <td>
+                            <span class="badge bg-secondary">{{ account.session_type }}</span>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>状态:</th>
+                        <td>
+                            {% if account.status == 'active' %}
+                                <span class="status-badge bg-success">活跃</span>
+                            {% elif account.status == 'banned' %}
+                                <span class="status-badge bg-danger">已封禁</span>
+                            {% elif account.status == 'expired' %}
+                                <span class="status-badge bg-warning">已过期</span>
+                            {% else %}
+                                <span class="status-badge bg-secondary">未知</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>最后检查:</th>
+                        <td>{{ account.last_check or '从未检查' }}</td>
+                    </tr>
+                    <tr>
+                        <th>创建时间:</th>
+                        <td>{{ account.created_at }}</td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-6 mb-4">
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white">
+                <h5 class="mb-0"><i class="bi bi-person"></i> 租户信息</h5>
+            </div>
+            <div class="card-body">
+                {% if tenant %}
+                <table class="table table-borderless mb-0">
+                    <tr>
+                        <th width="120">租户ID:</th>
+                        <td>{{ tenant.id }}</td>
+                    </tr>
+                    <tr>
+                        <th>TG用户ID:</th>
+                        <td><code>{{ tenant.telegram_id }}</code></td>
+                    </tr>
+                    <tr>
+                        <th>用户名:</th>
+                        <td>{{ tenant.username or '-' }}</td>
+                    </tr>
+                    <tr>
+                        <th>全名:</th>
+                        <td>{{ tenant.full_name or '-' }}</td>
+                    </tr>
+                    <tr>
+                        <th>授权等级:</th>
+                        <td>
+                            {% if tenant.authorization_level == 'vip' %}
+                                <span class="badge bg-warning">VIP</span>
+                            {% elif tenant.authorization_level == 'premium' %}
+                                <span class="badge bg-info">Premium</span>
+                            {% else %}
+                                <span class="badge bg-secondary">Basic</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>授权状态:</th>
+                        <td>
+                            {% if tenant.status == 'active' %}
+                                <span class="status-badge bg-success">激活</span>
+                            {% elif tenant.status == 'expired' %}
+                                <span class="status-badge bg-danger">已过期</span>
+                            {% elif tenant.status == 'suspended' %}
+                                <span class="status-badge bg-warning">已暂停</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>过期时间:</th>
+                        <td>{{ tenant.expire_date or '永不过期' }}</td>
+                    </tr>
+                </table>
+                <div class="mt-3">
+                    <a href="/admin/users?tenant_id={{ tenant.id }}" class="btn btn-sm btn-outline-primary">
+                        <i class="bi bi-arrow-right"></i> 查看租户详情
+                    </a>
+                </div>
+                {% else %}
+                <div class="text-center py-4">
+                    <i class="bi bi-person-x" style="font-size: 3rem; color: #ccc;"></i>
+                    <p class="text-muted mt-2 mb-0">此账号未关联租户</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Session数据 -->
+{% if session_data_parsed %}
+<div class="card border-0 shadow-sm mb-4">
+    <div class="card-header bg-white">
+        <h5 class="mb-0"><i class="bi bi-code-square"></i> Session数据</h5>
+    </div>
+    <div class="card-body">
+        <pre class="bg-light p-3 rounded" style="max-height: 400px; overflow-y: auto;"><code>{{ session_data_parsed | tojson(indent=2) }}</code></pre>
+    </div>
+</div>
+{% endif %}
+
+<!-- TGAPI会话 -->
+<div class="card border-0 shadow-sm mb-4">
+    <div class="card-header bg-white">
+        <h5 class="mb-0"><i class="bi bi-key"></i> TGAPI会话 ({{ tgapi_sessions|length }})</h5>
+    </div>
+    <div class="card-body p-0">
+        {% if tgapi_sessions %}
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>Token</th>
+                        <th>接码链接</th>
+                        <th>状态</th>
+                        <th>登录次数</th>
+                        <th>最大登录</th>
+                        <th>过期时间</th>
+                        <th>创建时间</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for session in tgapi_sessions %}
+                    <tr>
+                        <td><code>{{ session.token[:16] }}...</code></td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-primary" onclick="copyToClipboard('{{ session.full_url }}')">
+                                <i class="bi bi-clipboard"></i> 复制链接
+                            </button>
+                        </td>
+                        <td>
+                            {% if session.status == 'active' %}
+                                <span class="status-badge bg-success">活跃</span>
+                            {% elif session.status == 'used' %}
+                                <span class="status-badge bg-info">已使用</span>
+                            {% elif session.status == 'expired' %}
+                                <span class="status-badge bg-warning">已过期</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ session.login_count }}</td>
+                        <td>{{ session.max_login if session.max_login != -1 else '无限制' }}</td>
+                        <td>{{ session.expire_time or '永不过期' }}</td>
+                        <td>{{ session.created_at }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="text-center py-4">
+            <p class="text-muted mb-0">暂无TGAPI会话记录</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- 操作日志 -->
+<div class="card border-0 shadow-sm mb-4">
+    <div class="card-header bg-white">
+        <h5 class="mb-0"><i class="bi bi-clock-history"></i> 操作日志 (最近20条)</h5>
+    </div>
+    <div class="card-body p-0">
+        {% if logs %}
+        <div class="table-responsive">
+            <table class="table table-sm table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>时间</th>
+                        <th>操作</th>
+                        <th>操作者</th>
+                        <th>详情</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for log in logs %}
+                    <tr>
+                        <td>{{ log.timestamp }}</td>
+                        <td>
+                            <span class="badge bg-secondary">{{ log.action }}</span>
+                        </td>
+                        <td>{{ log.operator or 'System' }}</td>
+                        <td>{{ log.details or '-' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="text-center py-4">
+            <p class="text-muted mb-0">暂无操作日志</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// 复制到剪贴板
+function copyToClipboard(text) {
+    navigator.clipboard.writeText(text).then(() => {
+        alert('链接已复制到剪贴板！');
+    }).catch(err => {
+        alert('复制失败：' + err);
+    });
+}
+
+// 删除账号
+function deleteAccount(accountId) {
+    if (!confirm('确定要删除此账号吗？此操作不可撤销！')) {
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('account_ids', accountId);
+
+    fetch('/admin/accounts/bulk-delete', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert('删除成功！');
+            window.location.href = '/admin/accounts';
+        } else {
+            alert('删除失败：' + data.message);
+        }
+    })
+    .catch(error => {
+        alert('删除失败：' + error);
+    });
+}
+</script>
+{% endblock %}

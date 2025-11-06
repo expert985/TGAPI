@@ -466,8 +466,20 @@ async def account_list(
     accounts = db.fetchall(query, tuple(params)) if params else \
                db.fetchall(f"SELECT * FROM accounts ORDER BY created_at DESC LIMIT ? OFFSET ?", (per_page, offset))
 
-    # 获取所有租户（用于筛选下拉框）
-    tenants = db.fetchall("SELECT id, tenant_name, tenant_code FROM tenants ORDER BY tenant_name")
+    # 获取所有租户（用于筛选下拉框） - 使用authorized_users表
+    tenants = db.fetchall("SELECT id, telegram_id, username, full_name FROM authorized_users ORDER BY created_at DESC")
+
+    # 为账号添加租户信息
+    accounts_list = []
+    if accounts:
+        for account in accounts:
+            account_dict = dict(account)
+            # 查找租户信息
+            if account_dict.get('tenant_id'):
+                tenant_info = db.fetchone("SELECT full_name, username FROM authorized_users WHERE id = ?", (account_dict['tenant_id'],))
+                if tenant_info:
+                    account_dict['tenant_full_name'] = tenant_info['full_name'] or tenant_info['username']
+            accounts_list.append(account_dict)
 
     # 计算总页数
     total_pages = (total + per_page - 1) // per_page
@@ -475,7 +487,7 @@ async def account_list(
     return templates.TemplateResponse("admin/accounts.html", {
         "request": request,
         "user": user,
-        "accounts": [dict(a) for a in accounts] if accounts else [],
+        "accounts": accounts_list,
         "tenants": [dict(t) for t in tenants] if tenants else [],
         "status_filter": status_filter,
         "tenant_id": tenant_id,
@@ -513,12 +525,10 @@ async def account_detail(request: Request, account_id: int):
         except:
             account_dict['session_data_parsed'] = {}
 
-    # 获取租户信息
+    # 获取租户信息（从authorized_users表）
     tenant = None
     if account_dict.get('tenant_id'):
-        tenant = db.fetchone("SELECT * FROM tenants WHERE id = ?", (account_dict['tenant_id'],))
-        if tenant:
-            account_dict['tenant'] = dict(tenant)
+        tenant = db.fetchone("SELECT * FROM authorized_users WHERE id = ?", (account_dict['tenant_id'],))
 
     # 获取相关的TGAPI会话
     tgapi_sessions = db.fetchall(
@@ -526,20 +536,27 @@ async def account_detail(request: Request, account_id: int):
         (account_id,)
     )
 
-    # 获取操作日志
-    operation_logs = db.fetchall(
-        """SELECT * FROM operation_logs
-           WHERE details LIKE ?
-           ORDER BY created_at DESC LIMIT 20""",
-        (f"%account_id:{account_id}%",)
-    )
+    # 获取操作日志（假设logs表存在，如果不存在会返回空列表）
+    logs = []
+    try:
+        logs = db.fetchall(
+            """SELECT timestamp, action, operator, details FROM logs
+               WHERE details LIKE ?
+               ORDER BY timestamp DESC LIMIT 20""",
+            (f"%account:{account_id}%",)
+        )
+    except:
+        # 如果logs表不存在，返回空列表
+        pass
 
     return templates.TemplateResponse("admin/account_detail.html", {
         "request": request,
         "user": user,
         "account": account_dict,
+        "session_data_parsed": account_dict.get('session_data_parsed'),
+        "tenant": dict(tenant) if tenant else None,
         "tgapi_sessions": [dict(s) for s in tgapi_sessions] if tgapi_sessions else [],
-        "operation_logs": [dict(l) for l in operation_logs] if operation_logs else []
+        "logs": [dict(l) for l in logs] if logs else []
     })
 
 
