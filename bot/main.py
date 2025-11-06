@@ -27,7 +27,7 @@ from modules.auto_gen.autogen import autogen_tool
 
 # 授权检查装饰器
 def require_authorization(func):
-    """要求用户授权的装饰器"""
+    """要求用户授权的装饰器（支持命令和回调）"""
     async def wrapper(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         telegram_id = user.id
@@ -39,13 +39,18 @@ def require_authorization(func):
 
         if not authorized:
             # 记录未授权访问
-            command = update.message.text if update.message else None
+            command = None
+            if update.message:
+                command = update.message.text
+            elif update.callback_query:
+                command = f"callback:{update.callback_query.data}"
+
             auth_manager.log_unauthorized_access(
                 telegram_id=telegram_id,
                 username=username,
                 full_name=full_name,
                 command=command,
-                message=update.message.text if update.message else None
+                message=update.message.text if update.message else command
             )
 
             # 发送未授权消息
@@ -66,7 +71,12 @@ def require_authorization(func):
 
 💡 授权后即可使用机器人的所有功能！
 """
-            await update.message.reply_text(unauthorized_message)
+
+            # 根据update类型回复消息
+            if update.message:
+                await update.message.reply_text(unauthorized_message)
+            elif update.callback_query:
+                await update.callback_query.message.reply_text(unauthorized_message)
             return
 
         # 授权通过，执行原函数
@@ -149,6 +159,7 @@ class TGBotManager:
 
         await update.message.reply_text("🎯 请选择功能:", reply_markup=reply_markup)
 
+    @require_authorization
     async def license_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """许可证命令"""
         user_id = update.effective_user.id
@@ -195,6 +206,7 @@ class TGBotManager:
 
         await update.message.reply_text(license_info, parse_mode='Markdown')
 
+    @require_authorization
     async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """统计信息命令"""
         stats = db.get_stats()
@@ -210,6 +222,7 @@ class TGBotManager:
 
         await update.message.reply_text(stats_text, parse_mode='Markdown')
 
+    @require_authorization
     async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """按钮回调处理"""
         query = update.callback_query
