@@ -2,6 +2,7 @@
 管理员认证模块
 """
 import secrets
+import os
 from datetime import datetime, timedelta
 from typing import Optional, Dict
 from fastapi import Request, HTTPException, status
@@ -71,12 +72,17 @@ session_manager = SessionManager()
 class AdminAuth:
     """管理员认证"""
 
-    # 默认管理员账号（生产环境应该从数据库读取）
-    DEFAULT_ADMIN = {
-        "username": "admin",
-        "password_hash": hashlib.sha256("admin123".encode()).hexdigest(),  # 默认密码: admin123
-        "role": "admin"
-    }
+    @staticmethod
+    def _get_admin_config():
+        """从环境变量获取管理员配置"""
+        username = os.getenv("ADMIN_USERNAME", "admin")
+        password = os.getenv("ADMIN_PASSWORD", "admin123")
+
+        return {
+            "username": username,
+            "password_hash": hashlib.sha256(password.encode()).hexdigest(),
+            "role": "admin"
+        }
 
     @staticmethod
     def hash_password(password: str) -> str:
@@ -96,11 +102,13 @@ class AdminAuth:
         Returns:
             (是否成功, 错误消息)
         """
-        # TODO: 从数据库读取用户信息
-        if username != AdminAuth.DEFAULT_ADMIN["username"]:
+        # 从环境变量获取管理员配置
+        admin_config = AdminAuth._get_admin_config()
+
+        if username != admin_config["username"]:
             return False, "用户名或密码错误"
 
-        if not AdminAuth.verify_password(password, AdminAuth.DEFAULT_ADMIN["password_hash"]):
+        if not AdminAuth.verify_password(password, admin_config["password_hash"]):
             return False, "用户名或密码错误"
 
         return True, None
@@ -119,7 +127,8 @@ class AdminAuth:
 
         # 创建会话
         session_id = session_manager.create_session(username)
-        return True, session_id, AdminAuth.DEFAULT_ADMIN["role"]
+        admin_config = AdminAuth._get_admin_config()
+        return True, session_id, admin_config["role"]
 
     @staticmethod
     def logout(session_id: str):
