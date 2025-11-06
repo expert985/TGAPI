@@ -325,12 +325,199 @@ class TGBotManager:
 
         await query.edit_message_text(text, parse_mode='Markdown')
 
+    @require_authorization
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """处理普通消息"""
         # 处理文件上传（用于格式转换）
         if update.message.document:
+            await self.handle_file_upload(update, context)
+
+    async def handle_file_upload(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """处理文件上传和格式转换"""
+        from pathlib import Path
+        import tempfile
+        from modules.converter.converter import FormatConverter
+
+        document = update.message.document
+        file_name = document.file_name
+        user_id = update.effective_user.id
+
+        try:
             await update.message.reply_text("📁 文件已收到，正在处理...")
-            # TODO: 实现文件转换逻辑
+
+            # 下载文件到临时目录
+            file = await context.bot.get_file(document.file_id)
+            temp_dir = Path(tempfile.gettempdir()) / f"tgapi_uploads_{user_id}"
+            temp_dir.mkdir(parents=True, exist_ok=True)
+
+            input_file = temp_dir / file_name
+            await file.download_to_drive(str(input_file))
+
+            logger.info(f"📥 用户 {user_id} 上传文件: {file_name}")
+
+            # 检测文件类型
+            file_ext = input_file.suffix.lower()
+            file_type = None
+
+            if file_ext in ['.session']:
+                file_type = 'session'
+            elif file_ext in ['.json']:
+                file_type = 'json'
+            elif file_ext in ['.key', '.authkey']:
+                file_type = 'authkey'
+            elif file_name.lower() == 'tdata' or 'tdata' in file_name.lower():
+                file_type = 'tdata'
+            else:
+                await update.message.reply_text(
+                    f"❌ 不支持的文件类型: {file_ext}\n\n"
+                    "支持的格式：\n"
+                    "• .session - Session文件\n"
+                    "• .json - JSON格式\n"
+                    "• .key - AuthKey文件\n"
+                    "• tdata - TData文件夹（压缩为.zip）"
+                )
+                return
+
+            # 询问转换目标格式
+            keyboard = [
+                [
+                    InlineKeyboardButton("→ JSON", callback_data=f"convert_{file_type}_json_{input_file.name}"),
+                    InlineKeyboardButton("→ Session", callback_data=f"convert_{file_type}_session_{input_file.name}")
+                ],
+                [
+                    InlineKeyboardButton("→ AuthKey", callback_data=f"convert_{file_type}_authkey_{input_file.name}"),
+                    InlineKeyboardButton("→ TData", callback_data=f"convert_{file_type}_tdata_{input_file.name}")
+                ],
+                [InlineKeyboardButton("❌ 取消", callback_data="convert_cancel")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            await update.message.reply_text(
+                f"📝 文件类型: **{file_type.upper()}**\n"
+                f"📦 文件大小: {document.file_size / 1024:.2f} KB\n\n"
+                "请选择转换目标格式:",
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+
+            # 保存文件信息到context（用于后续转换）
+            context.user_data['pending_conversion'] = {
+                'input_file': str(input_file),
+                'input_type': file_type,
+                'user_id': user_id
+            }
+
+        except Exception as e:
+            error_msg = f"文件处理失败: {str(e)}"
+            logger.error(error_msg)
+            await update.message.reply_text(f"❌ {error_msg}")
+
+    async def handle_conversion_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """处理格式转换回调"""
+        from pathlib import Path
+        import tempfile
+        from modules.converter.converter import FormatConverter
+
+        query = update.callback_query
+        await query.answer()
+
+        callback_data = query.data
+
+        if callback_data == "convert_cancel":
+            await query.edit_message_text("❌ 转换已取消")
+            return
+
+        # 解析回调数据: convert_<source>_<target>_<filename>
+        parts = callback_data.split('_', 3)
+        if len(parts) < 4:
+            await query.edit_message_text("❌ 无效的转换请求")
+            return
+
+        _, source_format, target_format, _ = parts
+
+        # 获取之前保存的文件信息
+        if 'pending_conversion' not in context.user_data:
+            await query.edit_message_text("❌ 转换会话已过期，请重新上传文件")
+            return
+
+        conversion_info = context.user_data['pending_conversion']
+        input_file = Path(conversion_info['input_file'])
+        user_id = conversion_info['user_id']
+
+        if not input_file.exists():
+            await query.edit_message_text("❌ 文件已丢失，请重新上传")
+            return
+
+        try:
+            await query.edit_message_text("🔄 正在转换格式...")
+
+            converter = FormatConverter()
+            output_dir = input_file.parent / "output"
+            output_dir.mkdir(exist_ok=True)
+
+            # 读取输入文件
+            input_data = converter.load_from_file(str(input_file), source_format)
+
+            if not input_data:
+                await query.edit_message_text("❌ 无法读取输入文件")
+                return
+
+            # 执行转换
+            output_data = None
+            output_file = None
+
+            if source_format == 'session' and target_format == 'json':
+                # 需要API凭证
+                await query.edit_message_text(
+                    "🔑 Session转JSON需要API凭证\n\n"
+                    "请发送API ID和API Hash（用空格分隔）:\n"
+                    "例如: `12345678 abc123def456...`",
+                    parse_mode='Markdown'
+                )
+                return
+
+            elif source_format == 'json' and target_format == 'session':
+                output_data = converter.json_to_session(input_data)
+                output_file = output_dir / f"{input_file.stem}.session"
+
+            elif source_format == 'session' and target_format == 'authkey':
+                output_data = converter.session_to_authkey(input_data)
+                output_file = output_dir / f"{input_file.stem}.key"
+
+            else:
+                await query.edit_message_text(f"⚠️ 暂不支持 {source_format} → {target_format} 的转换")
+                return
+
+            # 保存输出文件
+            if output_data:
+                converter.save_to_file(output_data, str(output_file), target_format)
+
+                # 发送转换后的文件
+                await query.edit_message_text("✅ 转换完成！正在发送文件...")
+
+                with open(output_file, 'rb') as f:
+                    await context.bot.send_document(
+                        chat_id=query.message.chat_id,
+                        document=f,
+                        filename=output_file.name,
+                        caption=f"✅ 转换完成\n\n"
+                                f"源格式: {source_format.upper()}\n"
+                                f"目标格式: {target_format.upper()}"
+                    )
+
+                # 清理临时文件
+                input_file.unlink()
+                output_file.unlink()
+
+                logger.info(f"✅ 用户 {user_id} 完成格式转换: {source_format} → {target_format}")
+
+            else:
+                await query.edit_message_text("❌ 转换失败")
+
+        except Exception as e:
+            error_msg = f"转换失败: {str(e)}"
+            logger.error(error_msg)
+            await query.edit_message_text(f"❌ {error_msg}")
 
 
 async def setup_handlers(application: Application):
@@ -347,7 +534,14 @@ async def setup_handlers(application: Application):
     application.add_handler(CommandHandler("license", bot_manager.license_command))
     application.add_handler(CommandHandler("stats", bot_manager.stats_command))
 
-    # 注册回调处理器
+    # 注册回调处理器（按优先级注册）
+    # 1. 格式转换回调（convert_开头）
+    application.add_handler(CallbackQueryHandler(
+        bot_manager.handle_conversion_callback,
+        pattern='^convert_'
+    ))
+
+    # 2. 其他所有回调
     application.add_handler(CallbackQueryHandler(bot_manager.button_callback))
 
     # 注册消息处理器
