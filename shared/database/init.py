@@ -150,6 +150,38 @@ class Database:
             return query.replace('?', '%s')
         return query
 
+    def _now(self) -> str:
+        """返回当前时间的SQL表达式"""
+        return "NOW()" if self.db_type == "mysql" else "datetime('now')"
+
+    def _curdate(self) -> str:
+        """返回当前日期的SQL表达式"""
+        return "CURDATE()" if self.db_type == "mysql" else "DATE('now')"
+
+    def _date_sub(self, interval: str) -> str:
+        """返回日期减法的SQL表达式
+
+        Args:
+            interval: 例如 '30 MINUTE', '1 DAY', '1 HOUR'
+        """
+        if self.db_type == "mysql":
+            return f"DATE_SUB(NOW(), INTERVAL {interval})"
+        else:
+            # SQLite: datetime('now', '-30 minutes')
+            # 转换MySQL格式到SQLite格式
+            interval_map = {
+                'MINUTE': 'minutes',
+                'HOUR': 'hours',
+                'DAY': 'days',
+                'MONTH': 'months',
+                'YEAR': 'years'
+            }
+            for mysql_unit, sqlite_unit in interval_map.items():
+                if mysql_unit in interval.upper():
+                    num = interval.split()[0]
+                    return f"datetime('now', '-{num} {sqlite_unit}')"
+            return "datetime('now')"
+
     def execute(self, query: str, params: tuple = ()):
         """执行SQL查询"""
         query = self._convert_placeholders(query)
@@ -285,9 +317,9 @@ class Database:
         stats['active_tgapi_sessions'] = result['count'] if result else 0
 
         # 今日验证码推送数
-        result = self.fetchone("""
+        result = self.fetchone(f"""
             SELECT COUNT(*) as count FROM code_push_logs
-            WHERE DATE(push_time) = DATE('now')
+            WHERE DATE(push_time) = {self._curdate()}
         """)
         stats['today_code_pushes'] = result['count'] if result else 0
 

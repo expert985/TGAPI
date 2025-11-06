@@ -132,9 +132,9 @@ class LoadBalancer:
         # 2. 从数据库查询
         try:
             session = db.fetchone(
-                """SELECT assigned_bot_id FROM user_bot_sessions
+                f"""SELECT assigned_bot_id FROM user_bot_sessions
                    WHERE telegram_id = ?
-                   AND last_interaction > datetime('now', '-30 minutes')""",
+                   AND last_interaction > {db._date_sub('30 MINUTE')}""",
                 (telegram_id,)
             )
 
@@ -335,8 +335,8 @@ class LoadBalancer:
             )['count']
 
             active_sessions = db.fetchone(
-                """SELECT COUNT(*) as count FROM user_bot_sessions
-                   WHERE last_interaction > datetime('now', '-30 minutes')"""
+                f"""SELECT COUNT(*) as count FROM user_bot_sessions
+                   WHERE last_interaction > {db._date_sub('30 MINUTE')}"""
             )['count']
 
             return {
