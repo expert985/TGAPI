@@ -34,13 +34,19 @@
 ```bash
 # 必需
 Python 3.9+
-MySQL 8.0+
+SQLite 3.31+ (Python内置，无需安装)
 
 # 可选
 Redis 7.0+ (Bot Pool模式需要)
 Node.js 14+ + PM2 (使用PM2进程管理时需要)
 Docker + Docker Compose (使用Docker部署时需要)
 ```
+
+**💡 数据库说明**：
+- 当前版本使用 **SQLite** 轻量级数据库（零配置）
+- 适合场景：个人使用、中小规模部署（< 10万用户）
+- 数据文件：`data/bot.db`
+- 如需 MySQL 支持，请提交 Issue
 
 ### 2. 安装
 ```bash
